@@ -23,7 +23,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 APP_NAME = "Pen Pal"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 
 
 def frozen():
@@ -67,6 +67,7 @@ DESKTOP = False  # set by penpal.py when the page runs in its own window
 FRAMELESS = False  # set by penpal.py when the window uses Pen Pal's own title bar
 RESTART_HOOK = None  # set by penpal.py: closes the window after an update has been swapped in
 TITLE_BARS = ("custom", "windows")
+QUIET_OK = False  # the desktop app sets this so its log only gets failed requests
 
 
 def set_data_dir(path):
@@ -284,8 +285,12 @@ class Handler(SimpleHTTPRequestHandler):
     # Quiet, one-line logs; skip noisy static requests.
     def log_message(self, fmt, *args):
         # A windowed exe has no console: sys.stderr is None there, and writing to it would crash the request.
-        if self.path.startswith("/api/") and sys.stderr is not None:
-            sys.stderr.write("%s\n" % (fmt % args))
+        if not self.path.startswith("/api/") or sys.stderr is None:
+            return
+        # The desktop app keeps a log file; only problems go there, not every save.
+        if QUIET_OK and len(args) > 1 and str(args[1])[:1] in ("2", "3"):
+            return
+        sys.stderr.write("%s\n" % (fmt % args))
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")

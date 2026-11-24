@@ -378,7 +378,7 @@ def main():
               let maxed = false;
               const rec = (n) => (...a) => { window.__calls.push([n, ...a]); return Promise.resolve(); };
               window.pywebview = { api: {
-                win_minimize: rec('min'), win_close: rec('close'), open_data_folder: rec('open'),
+                win_minimize: rec('min'), win_close: rec('close'), open_data_folder: rec('open'), set_busy: rec('busy'),
                 win_bounds: () => Promise.resolve([100, 100, 1280, 900]),
                 win_set_bounds: rec('bounds'),
                 win_is_max: () => Promise.resolve(maxed),
@@ -426,6 +426,11 @@ def main():
             check(any(c[0] == "save" and c[1].startswith("pen-pal-backup-") for c in dpage.evaluate("window.__calls")), "downloads go through the Windows Save dialog")
             dpage.click('#nav [data-tab="settings"]')
             check(dpage.locator('button:has-text("Open the data folder")').count() == 1, "open-folder button in the app")
+            dpage.check('input[name=theme][value=dark]')
+            dpage.wait_for_function("window.__calls.filter(c => c[0] === 'busy').length >= 2")
+            busy = [c[1] for c in dpage.evaluate("window.__calls") if c[0] == "busy"]
+            check(busy[:2] == [True, False], "edits tell the window a save is pending, then that it finished")
+            dpage.check('input[name=theme][value=system]')
             dpage.screenshot(path=os.path.join(work, "settings-desktop.png"))
             dpage.click("#tbClose")
             check(["close"] in dpage.evaluate("window.__calls"), "close button reaches the window")

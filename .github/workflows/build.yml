@@ -43,6 +43,18 @@ jobs:
           Get-Content check.txt
           if ($p.ExitCode -ne 0) { exit 1 }
 
+      - name: Open the real window and drive it
+        shell: pwsh
+        run: |
+          foreach ($bar in 'custom', 'windows') {
+            $out = "$pwd\smoke-$bar.txt"
+            $p = Start-Process -FilePath dist\PenPal.exe -ArgumentList '--smoke', $out, '--title-bar', $bar -PassThru
+            if (-not $p.WaitForExit(240000)) { Stop-Process -Id $p.Id -Force; Write-Host "$bar title bar: the window hung"; exit 1 }
+            Write-Host "---- $bar title bar"
+            if (Test-Path $out) { Get-Content $out } else { Write-Host "no result file: the app crashed" }
+            if ($p.ExitCode -ne 0) { exit 1 }
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: PenPal-exe

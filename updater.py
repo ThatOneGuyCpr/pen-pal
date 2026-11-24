@@ -172,8 +172,8 @@ def relaunch(exe_path, args=()):
     return subprocess.Popen([exe_path, *args], cwd=os.path.dirname(exe_path), **kw)  # noqa: S603
 
 
-def cleanup_old(exe_path, tries=5):
-    """Delete the previous version left behind by an update. It may still be closing, so retry briefly."""
+def cleanup_old(exe_path, tries=5, wait=1.0):
+    """Delete the previous version left behind by an update. It may still be closing, so keep retrying."""
     old = paths_for(exe_path)["old"]
     for _ in range(tries):
         if not os.path.exists(old):
@@ -182,5 +182,5 @@ def cleanup_old(exe_path, tries=5):
             os.remove(old)
             return True
         except OSError:
-            time.sleep(1)
+            time.sleep(wait)
     return False

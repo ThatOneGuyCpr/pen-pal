@@ -57,6 +57,16 @@
     dirty = true;
     setStatus('Saving…');
     pump();
+    tellDesktop();
+  }
+  // The desktop window keeps its own copy of "is a save pending?", so closing never has to ask the page.
+  let toldBusy = false;
+  function tellDesktop() {
+    const busy = dirty || saving;
+    const api = window.pywebview && window.pywebview.api;
+    if (busy === toldBusy || !api || !api.set_busy) return;
+    toldBusy = busy;
+    Promise.resolve(api.set_busy(busy)).catch(() => { toldBusy = !busy; });
   }
   async function pump() {
     if (saving || conflict) return;
@@ -93,8 +103,9 @@
       }
     }
     saving = false;
+    tellDesktop();
   }
-  // The desktop window asks this before closing, so a save in flight can finish.
+  // For the test harness and the browser tab's own leave warning.
   window.PenPal = { busy: () => dirty || saving };
   window.addEventListener('beforeunload', (e) => {
     if (dirty || saving) { e.preventDefault(); e.returnValue = ''; }

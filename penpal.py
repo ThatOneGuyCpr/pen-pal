@@ -10,9 +10,14 @@ Usage:
   python penpal.py              open the app
   python penpal.py --browser    use the web browser instead of a window
   python penpal.py --check FILE self-test (used by the build): start, load every part, write FILE, exit
+  python penpal.py --smoke FILE [--title-bar windows]
+                                open the real window against a throwaway data folder, drive the
+                                title bar controls and a close during a save, write FILE, exit
 """
 import argparse
+import faulthandler
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -31,6 +36,45 @@ for _name in ("stdout", "stderr"):
 
 import server  # noqa: E402
 import updater  # noqa: E402
+
+LOG_NAME = "pen-pal-log.txt"
+LOG = logging.getLogger("penpal")
+
+
+def setup_logging(folder):
+    """Keep a log of this run (and the one before) in the data folder, so a crash leaves a reason behind.
+    It holds start-up details, warnings and errors. Never poem text: request bodies are not logged."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, LOG_NAME)
+    prev = os.path.join(folder, "pen-pal-log.prev.txt")
+    try:
+        if os.path.exists(path):
+            os.replace(path, prev)
+    except OSError:
+        pass
+    f = open(path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115  stays open for the life of the app
+    # A windowed exe has nowhere to print: send stray output and Python's own error reports to the log.
+    if sys.stderr is None or getattr(sys.stderr, "name", "") == os.devnull:
+        sys.stderr = f
+    if sys.stdout is None or getattr(sys.stdout, "name", "") == os.devnull:
+        sys.stdout = f
+    faulthandler.enable(file=f)  # a hard crash in native code still writes a stack trace
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        if getattr(h, "_penpal", False):
+            root.removeHandler(h)
+    h = logging.StreamHandler(f)
+    h._penpal = True
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+    root.addHandler(h)
+    root.setLevel(logging.INFO)
+
+    def hook(kind, info):
+        LOG.error("%s", kind, exc_info=info)
+
+    sys.excepthook = lambda *exc: hook("crash", exc)
+    threading.excepthook = lambda a: hook("crash in thread %s" % (a.thread.name if a.thread else "?"), (a.exc_type, a.exc_value, a.exc_traceback))
+    return path
 
 
 def start_server():
@@ -75,33 +119,43 @@ def work_area(window):
 class Api:
     """Functions the page can call through window.pywebview.api (desktop window only)."""
 
+    # pywebview walks every public attribute of this object to build window.pywebview.api, recursing
+    # into objects it finds. Anything that is not a method the page may call must start with "_":
+    # a public window here would send that walk through the native WinForms and WebView2 objects
+    # from a background thread, which can crash the app.
+
     def __init__(self):
-        self.window = None
-        self.saved_bounds = None  # where the window was before "maximize"
+        self._window = None
+        self._saved_bounds = None  # where the window was before "maximize"
+        self._busy = False  # the page has an edit that is not saved yet
+
+    def set_busy(self, busy):
+        """The page reports whether it has unsaved edits, so closing never has to ask it (see closing_handler)."""
+        self._busy = bool(busy)
 
     # ---- window controls for Pen Pal's own title bar ----
     def win_minimize(self):
-        self.window.minimize()
+        self._window.minimize()
 
     def win_bounds(self):
-        w = self.window
+        w = self._window
         return [w.x, w.y, w.width, w.height]
 
     def win_set_bounds(self, x, y, width, height):
-        w = self.window
+        w = self._window
         width, height = max(900, int(width)), max(620, int(height))
         w.resize(width, height)
         w.move(int(x), int(y))
-        self.saved_bounds = None
+        self._saved_bounds = None
 
     def win_is_max(self):
-        return self.saved_bounds is not None
+        return self._saved_bounds is not None
 
     def win_toggle_max(self):
-        w = self.window
-        if self.saved_bounds:
-            x, y, width, height = self.saved_bounds
-            self.saved_bounds = None
+        w = self._window
+        if self._saved_bounds:
+            x, y, width, height = self._saved_bounds
+            self._saved_bounds = None
             w.resize(width, height)
             w.move(x, y)
             return False
@@ -112,18 +166,17 @@ class Api:
             w.resize(width, height)
         except Exception:  # noqa: BLE001  not Windows, or the native call failed: use the stock maximize
             w.maximize()
-        self.saved_bounds = before
+        self._saved_bounds = before
         return True
 
     def win_close(self):
-        wait_for_saves(self.window)
-        self.window.destroy()
+        self._window.destroy()  # closing_handler waits for a save in flight
 
     def save_file(self, name, text):
         """Native Save dialog, then write the text. Returns the saved path, or '' if cancelled."""
         import webview  # noqa: PLC0415
 
-        result = self.window.create_file_dialog(webview.SAVE_DIALOG, save_filename=os.path.basename(str(name)))
+        result = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=os.path.basename(str(name)))
         if not result:
             return ""
         path = result if isinstance(result, str) else result[0]
@@ -143,16 +196,30 @@ class Api:
         return folder
 
 
-def wait_for_saves(window):
-    """Give a save that is still in flight a few seconds to finish."""
-    for _ in range(25):
-        try:
-            busy = window.evaluate_js("window.PenPal ? window.PenPal.busy() : false")
-        except Exception:  # noqa: BLE001
-            return
-        if not busy:
-            return
-        time.sleep(0.2)
+def closing_handler(api, window, timeout=5.0):
+    """Runs when the window is about to close. pywebview calls it on the UI thread and waits for it,
+    so it must not block or call evaluate_js (that waits on the UI thread too, and would freeze the app).
+    If a save is still pending, cancel this close, give the save a few seconds on another thread, then close again."""
+    state = {"waiting": False, "force": False}
+
+    def finish():
+        end = time.monotonic() + timeout
+        while api._busy and time.monotonic() < end:
+            time.sleep(0.1)
+        if api._busy:
+            LOG.warning("closing with an edit still unsaved after %.0f seconds", timeout)
+        state["force"] = True
+        window.destroy()
+
+    def on_closing():
+        if state["force"] or not api._busy:
+            return True
+        if not state["waiting"]:
+            state["waiting"] = True
+            threading.Thread(target=finish, daemon=True).start()
+        return False  # cancel for now
+
+    return on_closing
 
 
 def run_check(out_path):
@@ -199,15 +266,134 @@ def run_check(out_path):
     return 0 if ok else 1
 
 
+SMOKE_JS = r"""
+(async () => {
+  const r = {};
+  try {
+    const a = window.pywebview.api;
+    r.api = Object.keys(a).sort();
+    r.nav = document.querySelectorAll('#nav .navitem').length;
+    r.titlebar = !document.getElementById('titlebar').hidden;
+    r.b0 = await a.win_bounds();
+    r.max1 = await a.win_toggle_max();
+    r.isMax = await a.win_is_max();
+    r.b1 = await a.win_bounds();
+    r.max2 = await a.win_toggle_max();
+    await a.win_set_bounds(80, 60, 1000, 700);
+    await new Promise((s) => setTimeout(s, 600));
+    r.b2 = await a.win_bounds();
+    await a.win_set_bounds(80, 60, 500, 300);
+    await new Promise((s) => setTimeout(s, 600));
+    r.b3 = await a.win_bounds();
+  } catch (e) { r.error = String(e && e.message || e); }
+  window.__smoke = r;
+})();
+"""
+
+
+def run_smoke(out_path, title_bar):
+    """Open the real window (as the installed app does) against a throwaway data folder, drive the
+    title bar controls through the same bridge the page uses, then close while a save is pending.
+    Used by the Windows build; a hang or crash here fails the build instead of reaching anyone's PC."""
+    import webview  # noqa: PLC0415
+
+    tmp = tempfile.mkdtemp(prefix="penpal-smoke-")
+    lines, ok = [], [True]
+
+    def check(cond, label):
+        lines.append(("ok   " if cond else "FAIL ") + label)
+        if not cond:
+            ok[0] = False
+
+    server.set_data_dir(tmp)
+    log_path = setup_logging(tmp)
+    httpd, url = start_server()
+    frameless = title_bar == "custom"
+    window, api = open_window(webview, url, frameless)
+    timing = {}
+
+    def drive():
+        try:
+            check(window.events.loaded.wait(90), "page loaded")
+            res = None
+            for _ in range(150):  # wait for the app to draw its sidebar
+                if window.evaluate_js("document.querySelectorAll('#nav .navitem').length") or 0:
+                    break
+                time.sleep(0.2)
+            window.evaluate_js(SMOKE_JS)
+            for _ in range(150):
+                res = window.evaluate_js("window.__smoke || null")
+                if res:
+                    break
+                time.sleep(0.2)
+            res = res or {}
+            lines.append("     " + json.dumps(res))
+            check(not res.get("error"), "bridge calls work")
+            names = res.get("api") or []
+            check("win_toggle_max" in names and "set_busy" in names, "page sees the window controls")
+            check(all(not n.startswith("_") and n != "window" for n in names), "only methods are exposed to the page")
+            check(res.get("nav") == 12, "app drew all twelve sections")
+            check(res.get("titlebar") == frameless, "Pen Pal's title bar is %s" % ("shown" if frameless else "hidden"))
+            b0, b1, b2, b3 = (res.get(k) or [0, 0, 0, 0] for k in ("b0", "b1", "b2", "b3"))
+            check(res.get("max1") is True and res.get("isMax") is True and res.get("max2") is False, "maximize and restore")
+            check(b1 != b0, "maximize moved or resized the window")
+            check(abs(b2[2] - 1000) <= 2 and abs(b2[3] - 700) <= 2, "resize to 1000x700")
+            check(b3[2] >= 899 and b3[3] >= 619, "never smaller than 900x620")
+            # Close while the page reports an unsaved edit: the close waits, then goes through. No freeze.
+            window.evaluate_js("window.pywebview.api.set_busy(true); setTimeout(() => window.pywebview.api.set_busy(false), 1500)")
+            time.sleep(0.5)
+            timing["close"] = time.monotonic()
+            window.destroy()
+        except Exception as e:  # noqa: BLE001
+            check(False, "drive the window: %r" % e)
+            window.destroy()
+
+    def watchdog():  # if the window freezes, fail instead of hanging the build
+        time.sleep(150)
+        lines.append("FAIL timed out: the window froze")
+        finish(1)
+
+    def finish(code):
+        try:
+            with open(log_path, encoding="utf-8") as f:
+                log = f.read()
+        except OSError:
+            log = ""
+        bad = [ln for ln in log.splitlines() if " ERROR " in ln or "Error while processing" in ln or "Traceback" in ln]
+        if bad:
+            code = 1
+            lines.append("FAIL errors in the log:")
+            lines.extend("     " + ln for ln in bad[:20])
+        lines.append("ALL OK" if code == 0 else "FAILED")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n--- log ---\n" + log)
+        os._exit(code)
+
+    threading.Thread(target=watchdog, daemon=True).start()
+    webview.start(drive)
+    waited = time.monotonic() - timing.get("close", time.monotonic())
+    check(0.6 <= waited <= 8, "close waited for the save (%.1f s) and then closed" % waited)
+    httpd.shutdown()
+    time.sleep(0.5)
+    finish(0 if ok[0] else 1)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pen Pal")
     ap.add_argument("--browser", action="store_true", help="open in the web browser instead of a window")
     ap.add_argument("--check", metavar="FILE", help="self-test and write the result to FILE")
+    ap.add_argument("--smoke", metavar="FILE", help="open the real window, drive it, write the result to FILE")
+    ap.add_argument("--title-bar", choices=server.TITLE_BARS, default="custom", help="with --smoke: which title bar to test")
     args = ap.parse_args()
 
     if args.check:
         sys.exit(run_check(args.check))
+    if args.smoke:
+        sys.exit(run_smoke(args.smoke, args.title_bar))
 
+    log_path = setup_logging(os.path.dirname(server.DATA_FILE))
+    LOG.info("Pen Pal %s starting (%s, Python %s, frozen=%s)", server.APP_VERSION, sys.platform, sys.version.split()[0], server.frozen())
+    LOG.info("data file %s; log %s", server.DATA_FILE, log_path)
     problem = check_data_file()
     try:
         import webview  # noqa: PLC0415
@@ -225,7 +411,8 @@ def main():
         sys.exit(1)
 
     if server.frozen():
-        threading.Thread(target=updater.cleanup_old, args=(sys.executable,), daemon=True).start()
+        # The previous copy may take a while to close (2.1.0 could hang on close), so keep trying for a few minutes.
+        threading.Thread(target=updater.cleanup_old, args=(sys.executable, 60, 5), daemon=True).start()
     server.mirror_copy()
     httpd, url = start_server()
 
@@ -243,27 +430,30 @@ def main():
             print("\nStopped.")
         return
 
-    server.DESKTOP = True
     # Pen Pal's own title bar unless the person chose the standard Windows one in Settings.
     frameless = server.load_settings()["titleBar"] == "custom"
+    window, _api = open_window(webview, url, frameless)
+    LOG.info("window created (%s title bar)", "custom" if frameless else "standard")
+    webview.start()
+    LOG.info("window closed")
+    httpd.shutdown()
+
+
+def open_window(webview, url, frameless):
+    server.DESKTOP = True
+    server.QUIET_OK = True
     server.FRAMELESS = frameless
     api = Api()
     window = webview.create_window("Pen Pal", url, js_api=api, width=1280, height=840, min_size=(900, 620), background_color="#F8F9F9",
                                    frameless=frameless, easy_drag=False, shadow=True)
-    api.window = window
+    api._window = window
     server.RESTART_HOOK = window.destroy  # after an update is swapped in, the new copy is already starting
-
-    def on_closing():
-        wait_for_saves(window)
-        return True
-
-    window.events.closing += on_closing
+    window.events.closing += closing_handler(api, window)
     try:
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     except Exception:  # noqa: BLE001  older pywebview without settings
         pass
-    webview.start()
-    httpd.shutdown()
+    return window, api
 
 
 if __name__ == "__main__":

@@ -95,6 +95,7 @@ Pen Pal needs to be able to write to the folder `PenPal.exe` sits in (your Deskt
 - **The page says it could not load your data:** Pen Pal never overwrites a data file it can't read. Copy the newest file from the `backups` folder over `tracker.json`.
 - **SmartScreen blocks it:** More info, then Run anyway. The app is unsigned.
 - **The window is blank:** Windows 10 machines without the Edge WebView2 runtime need it from Microsoft (search "WebView2 Runtime"). Or run `PenPal.exe --browser` to use your browser.
+- **Pen Pal crashed or froze:** open the data folder (Settings, Your data) and look at `pen-pal-log.txt` (this run) and `pen-pal-log.prev.txt` (the run before). They hold start-up details and errors, never poem text. Send them along with a description of what happened.
 - **The update says it can't install:** move `PenPal.exe` somewhere you can write to (Desktop, Documents), or download the new version from the releases page.
 - **You want Windows' snapping back:** Settings, Title bar, Standard Windows title bar, then reopen Pen Pal.
 - **The second folder says the last copy failed:** the drive may be unplugged or the folder renamed. Your data is still saved.
