@@ -107,7 +107,7 @@ def main():
             page.on("dialog", lambda dlg: dlg.accept())
 
             def saved():
-                page.wait_for_function("document.querySelector('#saveState') && document.querySelector('#saveState').textContent === 'Saved on this PC'", timeout=8000)
+                page.wait_for_function("document.querySelector('#saveState') && /^Saved( |$)/.test(document.querySelector('#saveState').textContent)", timeout=8000)
 
             def tab(name):
                 page.click('#nav [data-tab="%s"]' % name)
@@ -418,6 +418,83 @@ def main():
             saved()
             check(api()["settings"]["checkUpdates"] is False, "start-up check can be turned off")
 
+            # ---- keep the data in a synced folder (iCloud Drive), and a second computer sharing it
+            cloud = os.path.join(work, "iCloudDrive", "Pen Pal")
+            os.makedirs(os.path.dirname(cloud))
+            cloud_file = os.path.join(cloud, "tracker.json")
+            page.reload()
+            page.wait_for_selector(".pagehead")
+            tab("settings")
+            page.click('[data-act="data-folder"]')
+            page.fill("#dlg [name=folder]", cloud)
+            page.wait_for_selector('#folderBtns button[value=move]')
+            check("Pen Pal will create this folder (iCloud Drive)" in page.inner_text("#folderInfo"), "checks the folder before moving: " + page.inner_text("#folderInfo")[:60])
+            with page.expect_navigation():
+                page.click('#folderBtns button[value=move]')
+            page.wait_for_selector(".pagehead")
+            tab("settings")
+            check(cloud in page.inner_text("#dataCard") and "iCloud Drive" in page.inner_text("#dataCard"), "data now lives in the iCloud Drive folder")
+            check(page.inner_text("#saveState") == "Saved to iCloud Drive", "sidebar says where it saved")
+            check(os.path.exists(cloud_file) and not os.path.exists(os.path.join(app, "data", "tracker.json")), "file moved; this PC's old copy renamed, not deleted")
+            check(any(f.startswith("moved-away-tracker-") for f in os.listdir(os.path.join(app, "data"))), "old copy kept under a new name")
+
+            def laptop_saves(base, **changes):
+                doc = json.loads(json.dumps(base))
+                doc.update(changes)
+                doc["lineage"] = (doc.get("lineage") or []) + ([base["saveId"]] if base.get("saveId") else [])
+                doc["saveId"] = "laptop%d" % len(doc["lineage"])
+                doc["savedOn"], doc["savedAt"], doc["rev"] = "LAPTOP", "2026-11-24T09:15:00", base["rev"] + 1
+                with open(cloud_file, "w", encoding="utf-8") as f:
+                    json.dump(doc, f)
+                return doc
+
+            def poke():  # what coming back to the window does (it also checks every few seconds)
+                page.evaluate("window.dispatchEvent(new Event('focus'))")
+
+            # the laptop saves on top of this PC's last save: picked up without asking
+            base = api()
+            laptop_saves(base, journals=base["journals"] + [{"id": "lap1", "name": "Laptop Review"}])
+            poke()
+            page.wait_for_selector("#toast:has-text('Updated with changes saved')")
+            check("on LAPTOP" in page.inner_text("#toast"), "picks up the laptop's save and says so")
+            tab("journals")
+            check("Laptop Review" in view(), "laptop's journal shows here")
+            # this PC saves, then the laptop's version (made without it) replaces the file
+            base = api()
+            page.locator("#view tbody tr", has_text="Laptop Review").locator("button.bell").click()
+            saved()
+            laptop_saves(base, journals=base["journals"] + [{"id": "lap2", "name": "Laptop Two"}])
+            poke()
+            page.wait_for_selector("#syncNote >> text=Changes made on this PC were replaced")
+            check("LAPTOP" in page.inner_text("#syncNote"), "replaced work is caught, with where it came from")
+            page.click('[data-act="sync-restore"]')
+            page.wait_for_selector("#toast:has-text('version is back')")
+            now = api()
+            lap = [j for j in now["journals"] if j["id"] == "lap1"]
+            check(lap and lap[0].get("notify") is True and "laptop%d" % len(base["lineage"] + [base["saveId"]]) in now["lineage"], "this PC's version is back, on top of the laptop's (so the laptop reloads it)")
+            check(page.inner_text("#syncNote").strip() == "", "notice cleared")
+            check(any(f.startswith("replaced-") for f in os.listdir(os.path.join(app, "data", "backups"))), "the laptop's version is kept in this PC's backups")
+            # a conflict copy left by the cloud service
+            with open(os.path.join(cloud, "tracker 2.json"), "w", encoding="utf-8") as f:
+                json.dump(dict(now, journals=[], savedOn="LAPTOP"), f)
+            poke()
+            page.wait_for_selector("#syncNote >> text=second copy of your data")
+            check("tracker 2.json" in page.inner_text("#syncNote") and "0 journals" in page.inner_text("#syncNote"), "second copy is flagged with what is in it")
+            page.click('[data-act="conflict-keep"]')
+            page.wait_for_function("document.querySelector('#syncNote').innerText.trim() === ''")
+            check(not os.path.exists(os.path.join(cloud, "tracker 2.json")) and any(f.startswith("second-copy-") for f in os.listdir(os.path.join(app, "data", "backups"))), "keeping the one in use moves the copy to backups")
+            check(len(api()["journals"]) == len(now["journals"]), "data untouched")
+            # and back to this PC
+            tab("settings")
+            page.click('[data-act="data-folder-local"]')
+            page.wait_for_selector('#folderBtns button[value=move]')
+            with page.expect_navigation():
+                page.click('#folderBtns button[value=move]')
+            page.wait_for_selector(".pagehead")
+            tab("settings")
+            check("on this PC" in page.inner_text("#dataCard") and os.path.exists(os.path.join(app, "data", "tracker.json")), "moved back to this PC")
+            check(len(api()["journals"]) == len(now["journals"]), "everything came back")
+
             # ---- the desktop window's own title bar, with a stand-in for the desktop bridge
             dpage = ctx.new_page()
             dpage.on("pageerror", lambda e: errors.append(str(e)))
@@ -479,7 +556,8 @@ def main():
             check(dpage.locator('button:has-text("Open the data folder")').count() == 1, "open-folder button in the app")
             # reminders through the desktop bridge
             calls = dpage.evaluate("window.__calls")
-            check(["sync", False] in calls, "at start-up, no journal has reminders, so no daily check")
+            any_bell = any(j.get("notify") for j in api()["journals"])
+            check(["sync", any_bell] in calls, "at start-up, the daily check matches whether any bell is on (%s)" % any_bell)
             dpage.click('#nav [data-tab="journals"]')
             dpage.click('button:has-text("Add journal")')
             dpage.fill("#dlg [name=name]", "Soon Review")

@@ -47,6 +47,7 @@
   let saving = false, dirty = false, conflict = false;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let saveText = '', saveBad = false;
+  const savedLabel = () => (info.dataCloud ? 'Saved to ' + info.dataCloud : info.dataCustom ? 'Saved' : 'Saved on this PC');
   function setStatus(text, bad) {
     saveText = text;
     saveBad = !!bad;
@@ -82,7 +83,7 @@
         if (r.status === 409) {
           conflict = true;
           $('#banner').innerHTML =
-            'Pen Pal was changed in another window, so your last edit here was not saved. ' +
+            'Pen Pal was changed in another window or on your other computer, so your last edit here was not saved. ' +
             '<button class="small" id="reloadBtn">Reload the latest version</button>';
           $('#reloadBtn').onclick = () => location.reload();
           setStatus('Not saved', true);
@@ -93,8 +94,8 @@
           try { msg = (await r.json()).error || msg; } catch (e) { /* ignore */ }
           throw new Error(msg);
         }
-        data.rev = (await r.json()).rev;
-        if (!dirty) setStatus('Saved on this PC');
+        Object.assign(data, await r.json()); // rev, saveId, savedOn, savedAt, lineage
+        if (!dirty) setStatus(savedLabel());
         refreshServer();
       } catch (e) {
         dirty = true;
@@ -138,7 +139,7 @@
   function stepHistory(redo) {
     const e = (redo ? L.historyRedo : L.historyUndo)(hist, L.snapshot(data));
     if (!e) return;
-    data = L.restoreSnapshot(e.json, data.rev);
+    data = L.restoreSnapshot(e.json, data);
     lastSnap = L.snapshot(data);
     render();
     markDirty();
@@ -621,7 +622,6 @@
   function viewSettings() {
     const st = data.settings;
     const radio = (name, value, label, checked) => '<label><input type="radio" name="' + name + '" value="' + value + '"' + (checked ? ' checked' : '') + '>' + label + '</label>';
-    const canOpen = window.pywebview && window.pywebview.api && window.pywebview.api.open_data_folder;
     const left = '<section class="card"><h2>Appearance</h2><h3>Theme</h3><div class="choice" role="radiogroup" aria-label="Theme">' +
       radio('theme', 'system', 'Match Windows', st.theme === 'system') + radio('theme', 'light', 'Light', st.theme === 'light') + radio('theme', 'dark', 'Dark', st.theme === 'dark') + '</div>' +
       '<h3 style="margin-top:16px">Title bar</h3><div class="choice" role="radiogroup" aria-label="Title bar">' +
@@ -634,8 +634,7 @@
       '<label>Show deadlines on the Desk for the next (days)<input id="deskDays" type="number" min="7" max="180" step="1" value="' + st.deskDays + '"></label>' +
       '<button class="primary" data-act="save-reminders">Save</button></section>' + remindCard();
     const right = updateCard() +
-      '<section class="card"><h2>Your data</h2><p class="hint">Saved in <code>' + esc(info.dataFolder || 'the data folder') + '</code>, with a daily copy in its backups folder.</p>' +
-      '<div class="btnrow">' + (canOpen ? '<button class="small" data-act="open-data-folder">Open the data folder</button>' : '') + '<button class="small" data-tab="export">Backups and second folder</button></div></section>' +
+      dataCard() +
       '<section class="card"><h2>About</h2><p style="margin:0;font-size:14px">Pen Pal ' + esc(info.version || '') + '. Your poems stay in your own files; Pen Pal keeps titles and notes.<br>' +
       'Journal directory: ' + dir.journals.length + ' journals, checked ' + (dir.checked ? fmtDate(dir.checked) : 'by hand') + '.</p>' +
       '<p style="margin:10px 0 0"><a href="https://github.com/ThatOneGuyCpr/pen-pal" target="_blank" rel="noopener noreferrer">Pen Pal on GitHub</a></p></section>';
@@ -679,6 +678,148 @@
 
   // ----- the desktop window's own title bar
   const desktopApi = () => (window.pywebview && window.pywebview.api) || null;
+
+  // ----- a data folder shared between computers (iCloud Drive and the like)
+  const sync = { conflicts: [], lost: null, busy: false };
+  const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+  const countsText = (c) => c ? plural(c.journals, 'journal') + ', ' + plural(c.poems, 'poem') + ', ' + plural(c.submissions, 'submission') : '';
+  const savedText = (c) => {
+    if (!c || !c.savedAt) return '';
+    const t = new Date(c.savedAt);
+    return 'saved ' + (isNaN(t) ? c.savedAt : t.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })) + (c.savedOn ? ' on ' + c.savedOn : '');
+  };
+  const currentCounts = () => ({ journals: data.journals.length, poems: data.poems.length, submissions: data.submissions.length, savedOn: data.savedOn, savedAt: data.savedAt });
+
+  async function reloadData(msg) {
+    const r = await fetch('/api/data');
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error || r.status);
+    data = L.normalize(body);
+    lastSnap = L.snapshot(data);
+    hist.past.length = 0; // undo would bring back what the other computer changed
+    hist.future.length = 0;
+    render();
+    if (msg) toast(msg);
+    checkReminders();
+  }
+  // Every few seconds (and when the window comes back into focus): has the file changed underneath us?
+  async function watchFile() {
+    if (!data || sync.busy || conflict || document.visibilityState === 'hidden') return;
+    let st;
+    try {
+      const r = await fetch('/api/data/stat');
+      if (!r.ok) return;
+      st = await r.json();
+    } catch (e) { return; }
+    const before = JSON.stringify([sync.conflicts, sync.lost]);
+    sync.conflicts = st.conflicts || [];
+    sync.lost = st.lost || null;
+    if (JSON.stringify([sync.conflicts, sync.lost]) !== before) renderSyncNote();
+    if (st.saveId === data.saveId || st.lost || dirty || saving) return; // mid-edit: the next save is refused and offers a reload
+    try { await reloadData('Updated with changes ' + (savedText(st) || 'saved elsewhere') + '.'); } catch (e) { /* try again next time */ }
+  }
+  function renderSyncNote() {
+    const el = $('#syncNote');
+    if (!el) return;
+    let h = '';
+    if (sync.lost) {
+      h += '<div class="syncrow"><div><b>Changes made on this PC were replaced.</b> Your other computer saved a version (' + esc(savedText(sync.lost.theirs) + ', ' + countsText(sync.lost.theirs)) +
+        ') that does not include this PC\'s last save (' + esc(savedText(sync.lost.mine) + ', ' + countsText(sync.lost.mine)) + '). Whichever you do not keep goes to this PC\'s backups folder.</div>' +
+        '<div class="btnrow"><button class="small primary" data-act="sync-restore">Put this PC\'s version back</button><button class="small" data-act="sync-keep">Keep the other version</button></div></div>';
+    }
+    for (const c of sync.conflicts) {
+      h += '<div class="syncrow"><div><b>Your cloud folder has a second copy of your data:</b> ' + esc(c.name) + ' (' + esc(c.summary ? countsText(c.summary) + (savedText(c.summary) ? ', ' + savedText(c.summary) : '') : 'Pen Pal cannot read it') +
+        '). Pen Pal is using tracker.json (' + esc(countsText(currentCounts())) + '). The one you do not keep goes to this PC\'s backups folder.</div>' +
+        '<div class="btnrow"><button class="small primary" data-act="conflict-keep" data-name="' + esc(c.name) + '">Keep the one in use</button>' +
+        (c.summary ? '<button class="small" data-act="conflict-use" data-name="' + esc(c.name) + '">Use the copy instead</button>' : '') + '</div></div>';
+    }
+    el.innerHTML = h;
+  }
+  async function resolveSync(body, after) {
+    sync.busy = true;
+    try {
+      await putJSON('/api/sync', body);
+      sync.lost = null;
+      sync.conflicts = sync.conflicts.filter((c) => c.name !== body.name);
+      renderSyncNote();
+      if (after) await reloadData(after);
+    } catch (e) {
+      toast('Could not do that: ' + e.message);
+    } finally {
+      sync.busy = false;
+    }
+  }
+  function dataCard() {
+    const canOpen = desktopApi() && desktopApi().open_data_folder;
+    const where = info.dataCloud ? ', in ' + info.dataCloud + '. Point Pen Pal on your other computer at the same folder to share it.' : info.dataCustom ? '.' : ', on this PC.';
+    return '<section class="card" id="dataCard"><h2>Your data</h2><p class="hint">Saved in <code>' + esc(info.dataFolder || 'the data folder') + '</code>' + esc(where) +
+      ' Daily copies go in this PC\'s own backups folder.</p>' +
+      '<div class="btnrow">' + (canOpen ? '<button class="small" data-act="open-data-folder">Open the data folder</button>' : '') +
+      '<button class="small" data-act="data-folder">' + (info.dataCustom ? 'Change folder' : 'Keep it in iCloud Drive or another synced folder') + '</button>' +
+      (info.dataCustom ? '<button class="small" data-act="data-folder-local">Move back to this PC</button>' : '') +
+      '<button class="small" data-tab="export">Backups and second folder</button></div></section>';
+  }
+  async function dataFolderDialog(backHome) {
+    if (dirty || saving) { toast('One moment: your last change is still saving.'); return; }
+    let loc;
+    try { loc = await (await fetch('/api/location')).json(); } catch (e) { toast('Could not look up the data folder.'); return; }
+    const a = desktopApi();
+    let checked = null;
+    openDialog(
+      '<h2>' + (backHome ? 'Move your data back to this PC' : 'Where to keep your data') + '</h2>' +
+      (backHome
+        ? '<p class="hint" style="margin-top:0">Pen Pal goes back to keeping your data in this PC\'s own folder. Your other computer will stop seeing changes made here.</p>'
+        : '<p class="hint" style="margin-top:0">Pick a folder that iCloud Drive (or OneDrive, Dropbox, Google Drive) keeps in sync. On your other computer, choose the same folder and use the data that is already there.</p>' +
+          (loc.suggestions.length ? '<div class="btnrow" style="margin:0 0 12px">' + loc.suggestions.map((g) => '<button type="button" class="small" data-pick="' + esc(g.path) + '">' + esc(g.label) + '</button>').join('') + '</div>' : '')) +
+      '<label>Folder<div class="folderrow"><input name="folder" autocomplete="off" spellcheck="false" placeholder="C:\\Users\\you\\iCloudDrive\\Pen Pal" value="' + esc(backHome ? loc.local : '') + '">' +
+      (a && a.pick_folder ? '<button type="button" class="small" id="browseFolder">Browse</button>' : '') + '</div></label>' +
+      '<p id="folderInfo" class="hint" aria-live="polite"></p>' +
+      '<div class="err" id="dlgErr" role="alert"></div><div class="actions"><span class="grow"></span><button type="button" data-close>Cancel</button><span id="folderBtns" class="btnrow"></span></div>',
+      (fd, action, form) => {
+        if (!checked || !['move', 'use', 'replace'].includes(action)) return false;
+        if (action === 'replace' && !confirm('Replace the Pen Pal data in that folder with this PC\'s? What is there now goes to this PC\'s backups folder first.')) return false;
+        sync.busy = true;
+        putJSON('/api/location', { folder: checked, mode: action }).then(() => {
+          $('#dlg').close();
+          toast(action === 'use' ? 'Switched to the data in that folder.' : 'Moved. Pen Pal now saves there.');
+          setTimeout(() => location.reload(), 700);
+        }, (e) => { sync.busy = false; setErr(form, e.message); });
+        return false;
+      },
+      (form) => {
+        const input = $('[name=folder]', form);
+        const check = async () => {
+          checked = null;
+          $('#folderBtns', form).innerHTML = '';
+          $('#folderInfo', form).textContent = '';
+          setErr(form, '');
+          const v = input.value.trim();
+          if (!v) return;
+          let res;
+          try { res = await (await fetch('/api/location/check?folder=' + encodeURIComponent(v))).json(); } catch (e) { setErr(form, 'Could not check that folder.'); return; }
+          if (input.value.trim() !== v) return; // typed on since
+          if (!res.ok) { setErr(form, res.error); return; }
+          checked = res.folder;
+          const label = res.cloud ? ' (' + res.cloud + ')' : '';
+          if (res.hasData) {
+            $('#folderInfo', form).textContent = 'This folder' + label + ' already has Pen Pal data: ' + countsText(res.summary) + (savedText(res.summary) ? ', ' + savedText(res.summary) : '') +
+              '. This PC has ' + countsText(currentCounts()) + '. Whichever you do not keep is set aside, not deleted.';
+            $('#folderBtns', form).innerHTML = '<button type="submit" value="replace">Replace it with this PC\'s data</button><button class="primary" type="submit" value="use">Use that data</button>';
+          } else {
+            $('#folderInfo', form).textContent = (res.create ? 'Pen Pal will create this folder' + label + '. ' : 'This folder' + label + ' has no Pen Pal data yet. ') +
+              'Your data (' + countsText(currentCounts()) + ') moves there, and the old copy is kept on this PC under a new name.';
+            $('#folderBtns', form).innerHTML = '<button class="primary" type="submit" value="move">Move my data here</button>';
+          }
+        };
+        let t;
+        input.addEventListener('input', () => { clearTimeout(t); t = setTimeout(check, 350); });
+        form.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => { input.value = b.dataset.pick; check(); }));
+        const br = $('#browseFolder', form);
+        if (br) br.addEventListener('click', async () => { const f = await a.pick_folder(input.value || ''); if (f) { input.value = f; check(); } });
+        if (input.value) check(); else input.focus();
+      }
+    );
+  }
 
   // ----- reading-period reminders (Windows notifications; which ones is decided in logic.js)
   let remindTask = null; // what the program said about the daily check while Pen Pal is closed
@@ -1652,6 +1793,12 @@
       redrawUpdates();
       try { await putJSON('/api/update/apply'); toast('Restarting on the new version…'); } catch (e) { upd.applying = false; upd.error = e.message; redrawUpdates(); }
     },
+    'data-folder': () => dataFolderDialog(false),
+    'data-folder-local': () => dataFolderDialog(true),
+    'sync-restore': () => resolveSync({ action: 'restore-mine' }, 'This PC\'s version is back. The other one is in this PC\'s backups folder.'),
+    'sync-keep': () => resolveSync({ action: 'keep-theirs' }),
+    'conflict-keep': (d) => resolveSync({ action: 'keep-current', name: d.name }),
+    'conflict-use': (d) => resolveSync({ action: 'use-copy', name: d.name }, 'Now using the copy. The other version is in this PC\'s backups folder.'),
     'toggle-notify': (d) => {
       const j = L.journalById(data, d.id);
       if (!j) return;
@@ -1831,11 +1978,15 @@
       lastSnap = L.snapshot(data);
       try { const d = await fetch('directory.json'); if (d.ok) dir = L.loadDirectory(await d.json()); } catch (e) { /* the app works without it */ }
       try { const i = await fetch('/api/info'); if (i.ok) info = await i.json(); } catch (e) { /* optional */ }
-      setStatus('Saved on this PC');
+      setStatus(savedLabel());
       render();
       setupTitleBar();
       startReminders();
       refreshServer();
+      watchFile();
+      setInterval(watchFile, 8000);
+      window.addEventListener('focus', watchFile);
+      document.addEventListener('visibilitychange', watchFile);
       if (data.settings.checkUpdates) checkForUpdates(false, true);
     } catch (e) {
       $('#view').innerHTML = '<div class="card alert"><h2>Could not load your data</h2><p>' + esc(e.message) +

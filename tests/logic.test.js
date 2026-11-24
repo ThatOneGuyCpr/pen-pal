@@ -1077,3 +1077,17 @@ test('how far ahead reminders come is a setting, and the bell is kept on the jou
   assert.equal(L.normalizeJournal({ name: 'X', notify: 'yes' }).notify, false);
   assert.equal(L.normalizeJournal({ name: 'X', notify: true }).notify, true);
 });
+
+// ---------- shared folder: the save chain rides along, and undo never touches it ----------
+test('save bookkeeping is kept, and undo changes data but not which save the file is on', () => {
+  const d = L.normalize({ journals: [{ id: 'a', name: 'A' }], rev: 4, saveId: 's4', savedOn: 'DESKTOP', savedAt: '2026-11-24T02:00:00', lineage: ['s2', 's3', 7] });
+  assert.deepEqual([d.saveId, d.savedOn, d.lineage], ['s4', 'DESKTOP', ['s2', 's3']]);
+  const snap = L.snapshot(d);
+  d.journals.push(L.normalizeJournal({ id: 'b', name: 'B' }));
+  Object.assign(d, { rev: 5, saveId: 's5', lineage: ['s2', 's3', 's4'] }); // the change was saved
+  const back = L.restoreSnapshot(snap, d);
+  assert.equal(back.journals.length, 1);
+  assert.deepEqual([back.rev, back.saveId, back.lineage], [5, 's5', ['s2', 's3', 's4']]);
+  assert.equal(L.snapshot(back), snap);
+  assert.equal(L.restoreSnapshot(snap, 9).rev, 9); // the older call style still works
+});

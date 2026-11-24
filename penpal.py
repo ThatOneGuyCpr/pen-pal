@@ -91,7 +91,11 @@ def start_server():
 
 
 def check_data_file():
-    """The same promise as server.py: never start over a data file that cannot be read."""
+    """The same promise as server.py: never start over a data file that cannot be read,
+    and never start an empty one in a moved-to folder that is not ready."""
+    problem = server.location_problem()
+    if problem:
+        return problem
     try:
         server.load_data()
         return None
@@ -192,13 +196,25 @@ class Api:
         """Native Save dialog, then write the text. Returns the saved path, or '' if cancelled."""
         import webview  # noqa: PLC0415
 
-        result = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=os.path.basename(str(name)))
+        fd = getattr(webview, "FileDialog", None)
+        result = self._window.create_file_dialog(fd.SAVE if fd else 30, save_filename=os.path.basename(str(name)))
         if not result:
             return ""
         path = result if isinstance(result, str) else result[0]
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(str(text))
         return path
+
+    def pick_folder(self, start=""):
+        """Native folder picker. Returns the folder, or '' if cancelled."""
+        import webview  # noqa: PLC0415
+
+        fd = getattr(webview, "FileDialog", None)
+        kind = fd.FOLDER if fd else 20  # 20 is FOLDER_DIALOG in older pywebview
+        result = self._window.create_file_dialog(kind, directory=str(start or ""))
+        if not result:
+            return ""
+        return result if isinstance(result, str) else result[0]
 
     def open_data_folder(self):
         folder = os.path.dirname(server.DATA_FILE)
@@ -283,7 +299,8 @@ def run_check(out_path):
 
 
 def reminder_folder():
-    return os.path.dirname(server.settings_path())
+    # With the data file: when it is shared between computers, a reminder shown on one is not shown again on the other.
+    return os.path.dirname(server.DATA_FILE)
 
 
 def icon_path():
@@ -359,8 +376,12 @@ def exit_now(code):
 
 def run_remind():
     """What the daily task runs while Pen Pal is closed: show any reminders due, then exit."""
-    folder = os.path.dirname(server.DATA_FILE)
-    setup_logging(folder, "pen-pal-reminders-log.txt")
+    server.apply_location()
+    setup_logging(server.MACHINE_DIR, "pen-pal-reminders-log.txt")
+    problem = server.location_problem()
+    if problem:
+        LOG.warning("skipped: %s", problem)
+        return 0
     try:
         doc = server.load_data()
     except Exception as e:  # noqa: BLE001
@@ -593,7 +614,8 @@ def main():
     if args.remind:
         exit_now(run_remind())
 
-    log_path = setup_logging(os.path.dirname(server.DATA_FILE))
+    server.apply_location()
+    log_path = setup_logging(server.MACHINE_DIR)
     LOG.info("Pen Pal %s starting (%s, Python %s, frozen=%s)", server.APP_VERSION, sys.platform, sys.version.split()[0], server.frozen())
     LOG.info("data file %s; log %s", server.DATA_FILE, log_path)
     problem = check_data_file()

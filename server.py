@@ -11,19 +11,22 @@ import argparse
 import datetime
 import json
 import os
+import platform
 import re
 import shutil
 import sys
 import tempfile
 import threading
 import time
+import urllib.parse
+import uuid
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 
 APP_NAME = "Pen Pal"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 
 
 def frozen():
@@ -70,11 +73,26 @@ TITLE_BARS = ("custom", "windows")
 QUIET_OK = False  # the desktop app sets this so its log only gets failed requests
 
 
+# Two folders. MACHINE_DIR is this PC's own: settings.json, daily backups, logs, and location.json,
+# which says where the data lives if you moved it (say, into iCloud Drive). DATA_DIR holds tracker.json
+# and reminders-sent.json; it is MACHINE_DIR unless you moved your data, and then it may be synced
+# between computers. Anything that is about this PC stays in MACHINE_DIR.
+MACHINE_DIR = DATA_DIR
+
+
 def set_data_dir(path):
-    global DATA_DIR, DATA_FILE, BACKUP_DIR
+    """Everything in one folder (the normal case, and tests)."""
+    global DATA_DIR, DATA_FILE, BACKUP_DIR, MACHINE_DIR
     DATA_DIR = path
+    MACHINE_DIR = path
     DATA_FILE = os.path.join(path, "tracker.json")
     BACKUP_DIR = os.path.join(path, "backups")
+
+
+def _use_folder(folder):
+    global DATA_DIR, DATA_FILE
+    DATA_DIR = folder
+    DATA_FILE = os.path.join(folder, "tracker.json")
 
 
 LOCK = threading.Lock()
@@ -160,7 +178,7 @@ def copy_atomic(src, dst):
 
 # ---- server-side settings (only the optional second backup folder, for now) ----
 def settings_path():
-    return os.path.join(os.path.dirname(DATA_FILE), "settings.json")
+    return os.path.join(MACHINE_DIR, "settings.json")
 
 
 def load_settings():
@@ -264,6 +282,262 @@ def save_data(obj, path=None):
         raise
 
 
+# ---- where the data lives, and keeping two computers honest through a synced folder ----
+LOCATION_NAME = "location.json"
+LAST_SAVED_NAME = "last-saved.json"  # in MACHINE_DIR: this PC's own copy of its latest save
+META_KEYS = ("saveId", "savedOn", "savedAt", "lineage")
+CONFLICT_RE = re.compile(r"^tracker.+\.json$", re.I)  # tracker 2.json, tracker-LAPTOP.json, tracker (conflicted copy).json
+
+
+def machine_name():
+    return (os.environ.get("COMPUTERNAME") or platform.node() or "this PC")[:60]
+
+
+def stamp_save(obj, base):
+    """Mark a save as building on `base`: new id, where and when, and the ids it descends from."""
+    lineage = [x for x in (base.get("lineage") or []) if isinstance(x, str)]
+    if base.get("saveId"):
+        lineage.append(base["saveId"])
+    obj["lineage"] = lineage[-50:]
+    obj["saveId"] = uuid.uuid4().hex[:16]
+    obj["savedOn"] = machine_name()
+    obj["savedAt"] = datetime.datetime.now().isoformat(timespec="seconds")
+    obj["rev"] = int(base.get("rev") or 0) + 1
+    return obj
+
+
+def save_meta(obj):
+    return {"rev": obj["rev"], "saveId": obj.get("saveId", ""), "savedOn": obj.get("savedOn", ""), "savedAt": obj.get("savedAt", ""), "lineage": obj.get("lineage", [])}
+
+
+def builds_on(doc, save_id):
+    """Does this file contain the save `save_id` (it is that save, or a later one made on top of it)?"""
+    return not save_id or doc.get("saveId") == save_id or save_id in (doc.get("lineage") or [])
+
+
+def custom_location():
+    return os.path.normcase(os.path.abspath(DATA_DIR)) != os.path.normcase(os.path.abspath(MACHINE_DIR))
+
+
+def remember_my_save(obj):
+    """With the data in a shared folder, keep this PC's latest save here too, so if the other computer's
+    copy replaces it (iCloud can keep one file and drop the other), it can be put back."""
+    if custom_location():
+        save_data(obj, os.path.join(MACHINE_DIR, LAST_SAVED_NAME))
+
+
+def location_path():
+    return os.path.join(MACHINE_DIR, LOCATION_NAME)
+
+
+def read_location():
+    try:
+        with open(location_path(), "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        folder = obj.get("dataFolder") if isinstance(obj, dict) else ""
+        return folder if isinstance(folder, str) and os.path.isabs(folder) else ""
+    except (OSError, ValueError):
+        return ""
+
+
+def apply_location():
+    """At start-up: use the folder you moved your data to, if you did."""
+    folder = read_location()
+    if folder:
+        _use_folder(folder)
+    return folder
+
+
+def location_problem():
+    """Why the data cannot be used right now, or None. Never start an empty file in a moved-to folder:
+    a missing file there usually means the cloud service has not caught up, not that you have no data."""
+    if not custom_location():
+        return None
+    if not os.path.isdir(DATA_DIR):
+        return ("Pen Pal keeps your data in %s, and that folder is not available right now. If it is in iCloud Drive "
+                "or another cloud folder, make sure that app is running and signed in, then open Pen Pal again." % DATA_DIR)
+    if not os.path.exists(DATA_FILE):
+        return ("Pen Pal keeps your data in %s, but tracker.json is not there. If the folder syncs from the cloud, wait for it "
+                "to finish (or mark the folder \"Always keep on this device\"), then open Pen Pal again." % DATA_DIR)
+    return None
+
+
+def cloud_label(path):
+    p = os.path.normcase(os.path.abspath(path)).replace("\\", "/").lower()
+    for key, label in (("iclouddrive", "iCloud Drive"), ("icloud drive", "iCloud Drive"), ("onedrive", "OneDrive"),
+                       ("dropbox", "Dropbox"), ("google drive", "Google Drive"), ("my drive", "Google Drive")):
+        if key in p:
+            return label
+    return ""
+
+
+def folder_suggestions():
+    """Cloud folders found on this PC, each with a Pen Pal folder inside."""
+    home = os.path.expanduser("~")
+    cands = [os.path.join(home, "iCloudDrive"), os.path.join(home, "iCloud Drive"),
+             os.environ.get("OneDrive") or os.path.join(home, "OneDrive"), os.path.join(home, "Dropbox"), "G:\\My Drive"]
+    out, seen = [], set()
+    for c in cands:
+        if c and os.path.isdir(c) and os.path.normcase(c) not in seen:
+            seen.add(os.path.normcase(c))
+            out.append({"label": cloud_label(c) or os.path.basename(c), "path": os.path.join(c, APP_NAME)})
+    return out
+
+
+def summary(doc):
+    doc = doc or {}
+    n = lambda k: len(doc.get(k) or []) if isinstance(doc.get(k), list) else 0  # noqa: E731
+    return {"journals": n("journals"), "poems": n("poems"), "submissions": n("submissions"),
+            "savedOn": str(doc.get("savedOn") or ""), "savedAt": str(doc.get("savedAt") or "")}
+
+
+def check_target(raw):
+    """Look at a folder you want to keep your data in. Returns (folder, info, error)."""
+    folder = (raw or "").strip().strip('"').strip()
+    if not folder or not os.path.isabs(folder):
+        return None, None, "Give the full path, for example C:\\Users\\you\\iCloudDrive\\Pen Pal."
+    folder = os.path.abspath(folder)
+    nc = os.path.normcase
+    if nc(folder) == nc(os.path.abspath(DATA_DIR)):
+        return None, None, "Your data is already in that folder."
+    home = nc(folder) == nc(os.path.abspath(MACHINE_DIR))  # this PC's own data folder is always fine
+    own = [BACKUP_DIR, PUBLIC] + ([getattr(sys, "_MEIPASS", "")] if frozen() else [])
+    for o in (nc(os.path.abspath(x)) for x in own if x):
+        if not home and (nc(folder) == o or nc(folder).startswith(o + os.sep)):
+            return None, None, "Pick a folder outside Pen Pal's own files."
+    info = {"folder": folder, "create": False, "hasData": False, "summary": None, "cloud": cloud_label(folder)}
+    if not os.path.isdir(folder):
+        if not os.path.isdir(os.path.dirname(folder)):
+            return None, None, "That folder does not exist, and neither does the one it would go in."
+        info["create"] = True
+        return folder, info, None
+    target = os.path.join(folder, "tracker.json")
+    if os.path.exists(target):
+        try:
+            info["summary"] = summary(load_data(target))
+            info["hasData"] = True
+        except Exception as e:  # noqa: BLE001
+            return None, None, "There is a tracker.json in that folder that Pen Pal cannot read (%s). Pick another folder or fix that file first." % e
+    try:
+        fd, tmp = tempfile.mkstemp(prefix="pen-pal-write-test-", dir=folder)
+        os.close(fd)
+        os.remove(tmp)
+    except OSError as e:
+        return None, None, "Pen Pal cannot write to that folder: %s" % e
+    return folder, info, None
+
+
+def change_location(raw, mode):
+    """Keep the data in another folder. mode: "move" (folder has no Pen Pal data: take this data there),
+    "use" (switch to the data already there), "replace" (put this data there; theirs goes to backups).
+    The copy left behind is renamed, never deleted. Returns (result, error)."""
+    folder, info, err = check_target(raw)
+    if err:
+        return None, err
+    if mode not in ("move", "use", "replace"):
+        return None, "Unknown choice."
+    if info["hasData"] and mode == "move":
+        return None, "That folder already has Pen Pal data. Choose to use it or to replace it."
+    if not info["hasData"] and mode != "move":
+        return None, "That folder has no Pen Pal data to use or replace."
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = os.path.join(folder, "tracker.json")
+    current = load_data()
+    os.makedirs(folder, exist_ok=True)
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    if mode == "move":
+        save_data(current, target)
+    elif mode == "replace":
+        theirs = load_data(target)
+        shutil.copy2(target, os.path.join(BACKUP_DIR, "replaced-%s.json" % stamp))
+        save_data(stamp_save(dict(current), theirs), target)
+    if os.path.exists(DATA_FILE):
+        os.replace(DATA_FILE, os.path.join(os.path.dirname(DATA_FILE), "moved-away-tracker-%s.json" % stamp))
+    if os.path.normcase(folder) == os.path.normcase(os.path.abspath(MACHINE_DIR)):
+        if os.path.exists(location_path()):
+            os.remove(location_path())
+    else:
+        save_data({"dataFolder": folder}, location_path())
+    _use_folder(folder)
+    lp = os.path.join(MACHINE_DIR, LAST_SAVED_NAME)
+    if os.path.exists(lp):
+        os.remove(lp)  # a fresh start: nothing of this PC's can have been lost in the new folder
+    return {"folder": folder}, None
+
+
+def conflict_copies():
+    """Second copies a cloud service left next to tracker.json when two computers changed it at once."""
+    out = []
+    try:
+        names = sorted(os.listdir(DATA_DIR))
+    except OSError:
+        return out
+    for name in names:
+        if name.lower() == "tracker.json" or not CONFLICT_RE.match(name):
+            continue
+        path = os.path.join(DATA_DIR, name)
+        item = {"name": name, "modified": datetime.datetime.fromtimestamp(os.path.getmtime(path)).isoformat(timespec="seconds")}
+        try:
+            item["summary"] = summary(load_data(path))
+        except Exception as e:  # noqa: BLE001
+            item["error"] = str(e)
+        out.append(item)
+    return out
+
+
+def sync_state():
+    """What the page polls: the file's current save, any second copies, and whether a save this PC
+    made has been replaced by another computer's version that does not include it."""
+    doc = load_data()
+    out = save_meta(doc)
+    out["custom"] = custom_location()
+    out["conflicts"] = conflict_copies() if out["custom"] else []
+    out["lost"] = None
+    lp = os.path.join(MACHINE_DIR, LAST_SAVED_NAME)
+    if out["custom"] and os.path.exists(lp):
+        try:
+            mine = load_data(lp)
+        except Exception:  # noqa: BLE001
+            mine = {}
+        if mine.get("saveId") and not builds_on(doc, mine["saveId"]):
+            out["lost"] = {"mine": summary(mine), "theirs": summary(doc)}
+    return out
+
+
+def resolve_sync(action, name=""):
+    """keep-theirs / restore-mine (after a lost save), keep-current / use-copy (a second copy). Nothing is
+    deleted: whatever is set aside goes to this PC's backups folder. Returns (result, error)."""
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    lp = os.path.join(MACHINE_DIR, LAST_SAVED_NAME)
+    if action in ("keep-theirs", "restore-mine"):
+        if not os.path.exists(lp):
+            return None, "Nothing to resolve."
+        if action == "keep-theirs":
+            os.replace(lp, os.path.join(BACKUP_DIR, "set-aside-mine-%s.json" % stamp))
+            return {"ok": True}, None
+        mine, current = load_data(lp), load_data()
+        shutil.copy2(DATA_FILE, os.path.join(BACKUP_DIR, "replaced-%s.json" % stamp))
+        obj = stamp_save({k: v for k, v in mine.items() if k not in META_KEYS}, current)
+        save_data(obj)
+        remember_my_save(obj)
+        return save_meta(obj), None
+    if action in ("keep-current", "use-copy"):
+        names = {c["name"] for c in conflict_copies()}
+        if name not in names:
+            return None, "That copy is not there any more."
+        path = os.path.join(DATA_DIR, name)
+        if action == "use-copy":
+            copy, current = load_data(path), load_data()
+            shutil.copy2(DATA_FILE, os.path.join(BACKUP_DIR, "replaced-%s.json" % stamp))
+            obj = stamp_save({k: v for k, v in copy.items() if k not in META_KEYS}, current)
+            save_data(obj)
+            remember_my_save(obj)
+        shutil.move(path, os.path.join(BACKUP_DIR, "second-copy-%s-%s" % (stamp, name)))
+        return {"ok": True}, None
+    return None, "Unknown choice."
+
+
 class Handler(SimpleHTTPRequestHandler):
     # Pin content types. On some Windows machines the registry maps .js to text/plain,
     # and with "nosniff" the browser would then refuse to run the page's scripts.
@@ -329,7 +603,21 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split("?")[0] == "/api/info":
             return self._send_json(200, {"app": APP_NAME, "version": APP_VERSION, "dataFolder": os.path.dirname(DATA_FILE), "desktop": DESKTOP,
                                          "frameless": FRAMELESS, "titleBar": load_settings()["titleBar"], "canInstall": can_install(),
-                                         "remindClosed": load_settings()["remindClosed"], "canRemindClosed": DESKTOP and frozen() and sys.platform.startswith("win")})
+                                         "remindClosed": load_settings()["remindClosed"], "dataCustom": custom_location(), "dataCloud": cloud_label(DATA_DIR), "canRemindClosed": DESKTOP and frozen() and sys.platform.startswith("win")})
+        route = self.path.split("?")[0]
+        if route in ("/api/data/stat", "/api/location", "/api/location/check"):
+            try:
+                with LOCK:
+                    if route == "/api/data/stat":
+                        return self._send_json(200, sync_state())
+                    if route == "/api/location":
+                        return self._send_json(200, {"folder": DATA_DIR, "custom": custom_location(), "local": MACHINE_DIR,
+                                                     "cloud": cloud_label(DATA_DIR), "suggestions": folder_suggestions()})
+                    q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                    folder, info, err = check_target((q.get("folder") or [""])[0])
+                    return self._send_json(200, {"ok": False, "error": err} if err else dict(info, ok=True))
+            except Exception as e:  # noqa: BLE001
+                return self._send_json(500, {"error": str(e)})
         if self.path.split("?")[0] == "/api/update":
             return self._send_json(200, update_check(force="force=1" in self.path))
         if self.path.split("?")[0] == "/api/update/status":
@@ -340,7 +628,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not self._host_ok():
             return self._send_json(403, {"error": "bad host"})
         route = self.path.split("?")[0]
-        if route not in ("/api/data", "/api/settings", "/api/update/download", "/api/update/apply"):
+        if route not in ("/api/data", "/api/settings", "/api/update/download", "/api/update/apply", "/api/location", "/api/sync"):
             return self._send_json(404, {"error": "not found"})
         # Cross-site pages cannot set this header without a CORS preflight, which we never allow.
         if self.headers.get("X-Pen-Pal") != "1" and self.headers.get("X-Poetry-Tracker") != "1":
@@ -363,6 +651,18 @@ class Handler(SimpleHTTPRequestHandler):
             return self._update_download()
         if route == "/api/update/apply":
             return self._update_apply()
+        if route in ("/api/location", "/api/sync"):
+            if not isinstance(obj, dict):
+                return self._send_json(400, {"error": "unexpected shape"})
+            with LOCK:
+                try:
+                    if route == "/api/location":
+                        res, err = change_location(str(obj.get("folder") or ""), str(obj.get("mode") or ""))
+                    else:
+                        res, err = resolve_sync(str(obj.get("action") or ""), str(obj.get("name") or ""))
+                except Exception as e:  # noqa: BLE001
+                    return self._send_json(500, {"error": "Could not do that: %s" % e})
+            return self._send_json(400, {"error": err}) if err else self._send_json(200, res)
         if not valid_payload(obj):
             return self._send_json(400, {"error": "unexpected data shape"})
 
@@ -371,17 +671,19 @@ class Handler(SimpleHTTPRequestHandler):
                 current = load_data()
             except Exception as e:
                 return self._send_json(500, {"error": "Could not read data file: %s" % e})
-            # Optimistic concurrency: refuse if another tab saved since this page loaded.
-            if obj["rev"] != current["rev"]:
+            # Optimistic concurrency: refuse if anything saved since this page loaded: another
+            # window (rev moved on) or another computer through a synced folder (saveId differs).
+            if obj["rev"] != current["rev"] or str(obj.get("saveId") or "") != str(current.get("saveId") or ""):
                 return self._send_json(409, {"error": "stale", "data": current})
-            obj["rev"] = current["rev"] + 1
+            stamp_save(obj, current)
             try:
                 daily_backup()
                 save_data(obj)
+                remember_my_save(obj)
             except OSError as e:
                 return self._send_json(500, {"error": "Could not save: %s" % e})
             mirror_copy()
-        return self._send_json(200, {"rev": obj["rev"]})
+        return self._send_json(200, save_meta(obj))
 
     def _put_settings(self, obj):
         """Changes only the keys sent: backupFolder, titleBar, remindClosed."""
@@ -456,6 +758,11 @@ def main():
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
 
+    apply_location()
+    problem = location_problem()
+    if problem:
+        print(problem)
+        sys.exit(1)
     # Refuse to start if the data file exists but is unreadable, so it never gets overwritten.
     try:
         load_data()

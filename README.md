@@ -59,6 +59,20 @@ The **Import** page takes two kinds of CSV file (save from Excel as "CSV UTF-8",
 
 You match each column to a field and see every row before anything is added. Dates like 3/4/2026 are read month first. Several titles in one cell can be split with semicolons.
 
+## Using Pen Pal on two computers
+
+Keep your data in a folder your cloud service syncs, like iCloud Drive:
+
+1. On the computer that has your data: Settings, Your data, **Keep it in iCloud Drive or another synced folder**. Pick (or type) a folder such as `iCloudDrive\Pen Pal` and choose **Move my data here**.
+2. Wait for iCloud to upload it.
+3. On the other computer: install Pen Pal, go to the same place, pick the same folder, and choose **Use that data**.
+
+Both computers now read and write the same file. When one saves, the other picks it up within a few seconds. If both change things before iCloud catches up, Pen Pal tells you and lets you choose which version to keep; the other goes to that PC's backups folder. Settings, logs and daily backups stay on each computer.
+
+Tip: in File Explorer, right-click the Pen Pal folder in iCloud Drive and choose **Always keep on this device**, so the file is there even when you're offline.
+
+To stop syncing, choose **Move back to this PC**.
+
 ## Settings
 
 The last item in the sidebar. It has:
@@ -96,6 +110,7 @@ Pen Pal needs to be able to write to the folder `PenPal.exe` sits in (your Deskt
 - **The page says it could not load your data:** Pen Pal never overwrites a data file it can't read. Copy the newest file from the `backups` folder over `tracker.json`.
 - **SmartScreen blocks it:** More info, then Run anyway. The app is unsigned.
 - **The window is blank:** Windows 10 machines without the Edge WebView2 runtime need it from Microsoft (search "WebView2 Runtime"). Or run `PenPal.exe --browser` to use your browser.
+- **Pen Pal says your data folder isn't available:** the synced folder (or its tracker.json) wasn't there when Pen Pal started. Make sure iCloud (or your cloud app) is running and signed in, wait for it to finish syncing, then open Pen Pal again. Pen Pal won't start an empty file there, so your data can't be split in two.
 - **Pen Pal crashed or froze:** open the data folder (Settings, Your data) and look at `pen-pal-log.txt` (this run) and `pen-pal-log.prev.txt` (the run before). They hold start-up details and errors, never poem text. Send them along with a description of what happened.
 - **Reminders don't show up:** Settings, Reading period reminders, Send a test notification. If nothing appears, open Windows Settings, System, Notifications, and make sure Pen Pal is allowed (and Do not disturb is off). The daily check while Pen Pal is closed is a Task Scheduler task called "Pen Pal reminders"; it is removed when you turn the option off or ring off every bell. If you delete Pen Pal, turn reminders off first, or delete that task in Task Scheduler.
 - **The update says it can't install:** move `PenPal.exe` somewhere you can write to (Desktop, Documents), or download the new version from the releases page.

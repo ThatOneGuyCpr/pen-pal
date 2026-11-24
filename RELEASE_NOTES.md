@@ -1,8 +1,9 @@
-Pen Pal 2.3.0
+Pen Pal 2.4.0
 
-- Reading period reminders. Ring the bell on a journal in My journals (or on its page in Find journals) and Pen Pal sends a Windows notification a few days before its reading period opens, and again before it closes. The closing reminder is skipped if you already sent something there that reading period.
-- They also come when Pen Pal is closed: Windows checks once a day at 9 AM and when you sign in. This is set up only once a bell is on, and you can turn it off in Settings.
-- Settings has the number of days ahead (3 to start) and a "Send a test notification" button.
-- Find journals: the panel on the right now follows you as you scroll down the list.
+- Keep your data in iCloud Drive (or OneDrive, Dropbox, Google Drive) and use Pen Pal on more than one computer. Settings, Your data, "Keep it in iCloud Drive or another synced folder". On the second computer, pick the same folder and choose "Use that data".
+- When your other computer saves, Pen Pal picks it up on its own.
+- If the cloud service ever keeps the other computer's version and drops changes made on this one, Pen Pal notices and offers to put them back. A second copy left in the folder by the cloud service is flagged too, and you choose which to keep. Nothing is deleted: whatever you don't keep goes to this PC's backups folder.
+- Settings, logs and daily backups stay on each computer. A reading period reminder shown on one computer isn't shown again on the other.
+- If the synced folder isn't available when Pen Pal starts (say iCloud isn't running yet), Pen Pal tells you instead of starting with an empty file.
 
-From 2.2.0: Settings, Check for updates.
+From 2.3.0: Settings, Check for updates.

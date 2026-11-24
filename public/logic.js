@@ -64,7 +64,7 @@
 
   // ---------- data model ----------
   function emptyData() {
-    return { rev: 0, poems: [], journals: [], submissions: [], manuscripts: [], entries: [], settings: normalizeSettings() };
+    return { rev: 0, poems: [], journals: [], submissions: [], manuscripts: [], entries: [], settings: normalizeSettings(), saveId: '', savedOn: '', savedAt: '', lineage: [] };
   }
 
   // Rights a journal took when it accepted a poem, and when the poem is free to go again.
@@ -224,6 +224,12 @@
     d.manuscripts = arr(raw.manuscripts).map(normalizeManuscript).filter((m) => m.title);
     d.entries = arr(raw.entries).map(normalizeEntry).filter((e) => e.name);
     d.settings = normalizeSettings(raw.settings);
+    // Which save this is, and the saves it builds on: lets two computers sharing a synced folder
+    // notice when one replaced the other's work. Written by the server; the page only carries them.
+    d.saveId = str(raw.saveId, 40);
+    d.savedOn = str(raw.savedOn, 60);
+    d.savedAt = str(raw.savedAt, 40);
+    d.lineage = arr(raw.lineage).filter((x) => typeof x === 'string').slice(-50);
     return d;
   }
 
@@ -849,11 +855,14 @@
   }
 
   // ---------- undo and redo ----------
-  // The page keeps a snapshot (JSON text, revision left out) before each change.
-  const snapshot = (data) => JSON.stringify(Object.assign({}, data, { rev: 0 }));
-  function restoreSnapshot(json, rev) {
+  // The page keeps a snapshot (JSON text, without the save bookkeeping) before each change.
+  // Undo changes your data, never which save the file is on.
+  const SAVE_META = ['rev', 'saveId', 'savedOn', 'savedAt', 'lineage'];
+  const snapshot = (data) => JSON.stringify(Object.assign({}, data, { rev: 0, saveId: '', savedOn: '', savedAt: '', lineage: [] }));
+  function restoreSnapshot(json, current) {
     const d = normalize(JSON.parse(json));
-    d.rev = rev;
+    if (typeof current === 'number') d.rev = current;
+    else for (const k of SAVE_META) d[k] = current[k];
     return d;
   }
   function createHistory(limit) {

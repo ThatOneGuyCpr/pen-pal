@@ -148,6 +148,14 @@ body.framed #nav { padding-top: 14px; }
 .topbar { display: flex; justify-content: flex-end; gap: 6px; padding: 12px 32px 0; }
 main { padding: 8px 32px 40px; max-width: 1180px; width: 100%; }
 main:focus { outline: none; }
+/* Problems with saving stay in view however far down the page you are. */
+#banner, #syncNote { position: sticky; top: 0; z-index: 5; }
+#syncNote:not(:empty) { background: var(--blue-soft); color: var(--ink); border-bottom: 1px solid var(--line); padding: 4px 32px; }
+.syncrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 8px 0; font-size: 13.5px; line-height: 1.45; }
+.syncrow + .syncrow { border-top: 1px solid var(--line); }
+.syncrow > div:first-child { flex: 1 1 420px; }
+.folderrow { display: flex; gap: 8px; }
+.folderrow input { flex: 1; }
 #banner:not(:empty) { background: var(--red-soft); color: var(--red-ink); border-bottom: 1px solid var(--line); padding: 12px 32px; }
 
 .pagehead { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; margin: 0 0 18px; }

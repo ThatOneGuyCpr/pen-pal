@@ -14,9 +14,7 @@ class ServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        server.DATA_DIR = cls.tmp.name
-        server.DATA_FILE = os.path.join(cls.tmp.name, "tracker.json")
-        server.BACKUP_DIR = os.path.join(cls.tmp.name, "backups")
+        server.set_data_dir(cls.tmp.name)
         cls.httpd, cls.port = server.make_server(18765)
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
         cls.thread.start()
@@ -118,9 +116,8 @@ class ServerTests(unittest.TestCase):
 
     def test_daily_backup_created(self):
         d = {"rev": 0, "poems": [], "journals": [], "submissions": []}
-        self.put(d)
-        d["rev"] = 1
-        self.put(d)  # second save triggers a backup of the first
+        d.update(json.loads(self.put(d)[1]))  # the page carries rev and saveId forward
+        self.assertEqual(self.put(d)[0], 200)  # second save triggers a backup of the first
         self.assertTrue(os.path.isdir(server.BACKUP_DIR))
         self.assertEqual(len(os.listdir(server.BACKUP_DIR)), 1)
 
@@ -201,11 +198,12 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(s, 200)
             self.assertEqual(json.loads(raw)["backupFolder"], other)
             data = {"rev": 0, "poems": [{"id": "a", "title": "First"}], "journals": [], "submissions": []}
-            self.assertEqual(self.put(data)[0], 200)
+            s, raw = self.put(data)
+            self.assertEqual(s, 200)
             latest = os.path.join(other, "pen-pal-latest.json")
             with open(latest, encoding="utf-8") as f:
                 self.assertEqual(json.load(f)["poems"][0]["title"], "First")
-            data["rev"] = 1
+            data.update(json.loads(raw))
             data["poems"][0]["title"] = "Second"
             self.put(data)
             with open(latest, encoding="utf-8") as f:
