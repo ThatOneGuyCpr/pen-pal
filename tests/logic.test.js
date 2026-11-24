@@ -250,7 +250,7 @@ test('old data files load unchanged and gain the new empty parts', () => {
   assert.equal(d.journals[0].repeat, 'none');
   assert.deepEqual(d.manuscripts, []);
   assert.deepEqual(d.entries, []);
-  assert.deepEqual(d.settings, { lastBackupDownload: '', backupSnoozedUntil: '', budgets: {}, budgetWarnPct: 80, countPlanned: true });
+  assert.deepEqual(d.settings, { lastBackupDownload: '', backupSnoozedUntil: '', budgets: {}, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, checkUpdates: true });
   assert.deepEqual(d.poems[0].rights, { bought: '', issue: '', pubDate: '', exclusiveUntil: '', reprints: 'unknown', revert: '', credit: '' });
   assert.equal(d.journals[0].alwaysOpen, false);
   // normalizing twice changes nothing
@@ -764,7 +764,7 @@ test('budget settings and what is left', () => {
   assert.equal(L.budgetSummary(d, 2026).left, 72);
   L.setBudget(d, 2026, '');
   assert.equal(L.budgetSummary(d, 2026).budget, null);
-  assert.deepEqual(L.normalizeSettings({ budgets: { 2026: -5, abc: 3, 2027: '40' }, budgetWarnPct: 500 }), { lastBackupDownload: '', backupSnoozedUntil: '', budgets: { 2027: 40 }, budgetWarnPct: 80, countPlanned: true });
+  assert.deepEqual(L.normalizeSettings({ budgets: { 2026: -5, abc: 3, 2027: '40' }, budgetWarnPct: 500 }), { lastBackupDownload: '', backupSnoozedUntil: '', budgets: { 2027: 40 }, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, checkUpdates: true });
 });
 
 test('budget warnings in the pre-send checks', () => {
@@ -993,4 +993,23 @@ test('history import: build, duplicates and apply', () => {
   // importing the same file again adds nothing
   const again = L.buildSubImport(parsed, L.guessSubMapping(parsed.headers), d, '2026-11-23');
   assert.equal(again.filter((r) => r.status === 'new').length, 0);
+});
+
+
+// ---------- settings page ----------
+test('display and reminder settings normalize with safe defaults', () => {
+  const st = L.normalizeSettings({ theme: 'dark', followUpDays: '45', deskDays: 30, checkUpdates: false });
+  assert.deepEqual([st.theme, st.followUpDays, st.deskDays, st.checkUpdates], ['dark', 45, 30, false]);
+  const bad = L.normalizeSettings({ theme: 'purple', followUpDays: 2, deskDays: 9999, checkUpdates: 'no' });
+  assert.deepEqual([bad.theme, bad.followUpDays, bad.deskDays, bad.checkUpdates], ['system', 90, 60, true]);
+});
+
+test('the follow-up setting changes the default wait', () => {
+  const d = fixture();
+  // s3 at a journal with no history or stated reply time, sent 2026-10-06
+  assert.ok(!L.queryReminders(d, '2026-11-20').some((x) => x.sub.id === 's3'));
+  d.settings = L.normalizeSettings(Object.assign({}, d.settings, { followUpDays: 30 }));
+  const r = L.queryReminders(d, '2026-11-20').find((x) => x.sub.id === 's3');
+  assert.equal(r.expected, 30);
+  assert.equal(r.basis, 'default');
 });

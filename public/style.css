@@ -29,8 +29,7 @@
   --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+:root[data-theme="dark"] {
     --bg: #12171d;
     --side: #171e26;
     --panel: #1b232c;
@@ -48,12 +47,36 @@
     --gray-soft: #242d37;
     --on-blue: #0f1a2a;
     --focus: #8ab4ff;
+  
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12171d;
+    --side: #171e26;
+    --panel: #1b232c;
+    --ink: #e8ecef;
+    --ink2: #c7cfd5;
+    --muted: #9aa5ae;
+    --line: #2d3742;
+    --line2: #4a5764;
+    --red: #f08a7e;
+    --red-soft: #3a2421;
+    --red-ink: #ffb8ad;
+    --blue: #93b4e8;
+    --blue-soft: #1e2c40;
+    --blue-mid: #4c6a96;
+    --gray-soft: #242d37;
+    --on-blue: #0f1a2a;
+    --focus: #8ab4ff;
+  
   }
 }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 html { color-scheme: light dark; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 a { color: var(--blue); }
 h1, h2 { font-family: var(--serif); font-weight: 400; color: var(--ink); }
@@ -67,12 +90,12 @@ h3 { font: 600 0.98rem var(--sans); margin: 0 0 6px; }
 .grow { flex: 1; }
 
 /* ---------- shell ---------- */
-.stripe { height: 6px; background: repeating-linear-gradient(135deg, var(--red) 0 14px, var(--panel) 14px 21px, var(--blue) 21px 35px, var(--panel) 35px 42px); }
-.shell { display: flex; min-height: calc(100vh - 6px); background: linear-gradient(to right, var(--side) 226px, var(--line) 226px, var(--line) 227px, transparent 227px); }
+.stripe { flex-shrink: 0; height: 6px; background: repeating-linear-gradient(135deg, var(--red) 0 14px, var(--panel) 14px 21px, var(--blue) 21px 35px, var(--panel) 35px 42px); }
+.shell { flex: 1; min-height: 0; display: flex; background: linear-gradient(to right, var(--side) 226px, var(--line) 226px, var(--line) 227px, transparent 227px); }
 #nav {
   width: 226px; flex-shrink: 0; background: var(--side); border-right: 1px solid var(--line);
   padding: 16px 12px; display: flex; flex-direction: column; gap: 2px;
-  position: sticky; top: 0; height: calc(100vh - 6px); overflow-y: auto;
+  overflow-y: auto;
 }
 .brand { display: flex; align-items: center; gap: 9px; padding: 2px 8px 14px; font: 400 1.2rem var(--serif); white-space: nowrap; flex-shrink: 0; }
 .navitem {
@@ -91,7 +114,37 @@ h3 { font: 600 0.98rem var(--sans); margin: 0 0 6px; }
 #backupState { font-size: 12px; color: var(--muted); line-height: 1.45; }
 #backupState.bad { color: var(--red); font-weight: 600; }
 
-.mainwrap { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mainwrap { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+
+/* ---------- Pen Pal's own title bar (desktop app) ---------- */
+#titlebar { flex-shrink: 0; height: 38px; display: flex; align-items: stretch; background: var(--side); border-bottom: 1px solid var(--line); user-select: none; }
+#titlebar[hidden] { display: none; }
+.tb-drag { flex: 1; display: flex; align-items: center; gap: 9px; padding-left: 14px; font: 400 15px var(--serif); color: var(--ink); cursor: default; }
+.tb-btn { width: 46px; height: 38px; border: 0; border-radius: 0; background: transparent; color: var(--ink2); display: grid; place-items: center; padding: 0; }
+.tb-btn:hover { background: color-mix(in srgb, var(--ink) 9%, transparent); border: 0; }
+.tb-close:hover { background: #c42b1c; color: #fff; }
+.tb-btn:focus-visible { outline-offset: -3px; }
+body.framed .brand { display: none; }
+body.framed #nav { padding-top: 14px; }
+#resizers[hidden], body.maxed #resizers { display: none; }
+#resizers > div { position: fixed; z-index: 100; }
+#resizers [data-edge="n"] { top: 0; left: 10px; right: 10px; height: 5px; cursor: ns-resize; }
+#resizers [data-edge="s"] { bottom: 0; left: 10px; right: 10px; height: 5px; cursor: ns-resize; }
+#resizers [data-edge="w"] { left: 0; top: 10px; bottom: 10px; width: 5px; cursor: ew-resize; }
+#resizers [data-edge="e"] { right: 0; top: 10px; bottom: 10px; width: 5px; cursor: ew-resize; }
+#resizers [data-edge="nw"] { top: 0; left: 0; width: 10px; height: 10px; cursor: nwse-resize; }
+#resizers [data-edge="ne"] { top: 0; right: 0; width: 10px; height: 10px; cursor: nesw-resize; }
+#resizers [data-edge="sw"] { bottom: 0; left: 0; width: 10px; height: 10px; cursor: nesw-resize; }
+#resizers [data-edge="se"] { bottom: 0; right: 0; width: 10px; height: 10px; cursor: nwse-resize; }
+
+/* ---------- settings ---------- */
+.choice { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 6px; }
+.choice label { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 14px; height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-weight: 500; color: var(--ink); cursor: pointer; }
+.choice label:has(input:checked) { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); font-weight: 600; }
+.choice input { width: auto; margin: 0; accent-color: var(--blue); }
+.progress { height: 8px; border-radius: 4px; background: var(--gray-soft); overflow: hidden; margin: 10px 0 6px; }
+.progress span { display: block; height: 100%; background: var(--blue); transition: width 0.2s; }
+.notes { white-space: pre-wrap; font-size: 13.5px; color: var(--ink2); background: var(--bg); border-radius: 9px; padding: 10px 12px; margin: 8px 0 0; max-height: 180px; overflow: auto; }
 .topbar { display: flex; justify-content: flex-end; gap: 6px; padding: 12px 32px 0; }
 main { padding: 8px 32px 40px; max-width: 1180px; width: 100%; }
 main:focus { outline: none; }
@@ -291,6 +344,8 @@ textarea.mono { font: 0.95rem/1.5 var(--serif); min-height: 140px; }
   .detail { position: static; }
 }
 @media (max-width: 760px) {
+  body { height: auto; overflow: visible; display: block; }
+  .mainwrap { overflow: visible; }
   .shell { flex-direction: column; background: none; }
   #nav { width: auto; height: auto; position: static; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand { padding: 0 10px 0 4px; }

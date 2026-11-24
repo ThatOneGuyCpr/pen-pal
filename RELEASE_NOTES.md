@@ -1,13 +1,7 @@
-Pen Pal 2.0.0: the Poetry Tracker, renamed and rebuilt as a Windows program.
+Pen Pal 2.1.0
 
-- Opens in its own window (PenPal.exe). No Python needed.
-- Find journals: a starter directory of 22 poetry journals checked by hand, with filters and one-click adding, plus searches on Chill Subs and Poets & Writers.
-- Fee budget: a yearly budget, a month-by-month chart, and a warning before a fee goes over.
-- Follow-up reminders based on how long each journal usually takes.
-- Rights and reprints on each poem, with a credit line and a reminder when the exclusive period ends.
-- Import your submission history from a CSV, as well as journal lists.
-- Journals can have two reading windows a year, or be open all year.
-- New look: the Desk, a sidebar, and airmail details.
+- Settings: theme (match Windows, light or dark), how long to wait before suggesting a follow-up, how far ahead the Desk shows deadlines, and where your data lives.
+- Pen Pal's own title bar, in the airmail style, with minimize, maximize and close. You can drag any edge to resize. Prefer the standard Windows bar (it keeps Snap layouts)? Switch in Settings.
+- Updates: Settings has "Check for updates", and Pen Pal checks on its own when it opens (you can turn that off). New versions download, get checked against GitHub's published fingerprint, and install with one restart.
 
-First run: Windows SmartScreen may warn because the app isn't signed. Choose More info, then Run anyway.
-To bring your old data across: Export and backup, Restore from a backup file, then pick data\tracker.json from your Poetry Tracker folder.
+Coming from 2.0.0: download this PenPal.exe once by hand and replace the old one. From here on, updates install from inside the app.

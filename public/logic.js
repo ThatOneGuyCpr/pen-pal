@@ -16,6 +16,7 @@
   const MS_KINDS = ['chapbook', 'full-length', 'other'];
   const ENTRY_STATUSES = ['planned', 'pending', 'finalist', 'accepted', 'rejected', 'withdrawn'];
   const YN = ['yes', 'no', 'unknown'];
+  const THEMES = ['system', 'light', 'dark'];
   const RIGHTS_KINDS = ['First North American serial', 'First serial', 'First electronic', 'One-time', 'Other'];
 
   // ---------- small helpers ----------
@@ -175,12 +176,17 @@
       }
     }
     const pct = intOrNull(s.budgetWarnPct);
+    const inRange = (v, lo, hi, dflt) => { const n = intOrNull(v); return n !== null && n >= lo && n <= hi ? n : dflt; };
     return {
       lastBackupDownload: dateOr(s.lastBackupDownload),
       backupSnoozedUntil: dateOr(s.backupSnoozedUntil),
       budgets,
       budgetWarnPct: pct && pct >= 1 && pct <= 100 ? pct : 80,
       countPlanned: s.countPlanned !== false,
+      theme: THEMES.includes(s.theme) ? s.theme : 'system',
+      followUpDays: inRange(s.followUpDays, 14, 365, 90),
+      deskDays: inRange(s.deskDays, 7, 180, 60),
+      checkUpdates: s.checkUpdates !== false,
     };
   }
 
@@ -906,7 +912,7 @@
       if (row && row.waits >= 2 && row.medianDays) return { days: Math.round(row.medianDays), basis: 'history' };
       if (journal.replyDays) return { days: journal.replyDays, basis: 'journal' };
     }
-    return { days: 90, basis: 'default' };
+    return { days: normalizeSettings(data.settings).followUpDays, basis: 'default' };
   }
   function queryReminders(data, today) {
     const out = [];
@@ -1349,7 +1355,7 @@
   }
 
   return {
-    POEM_STATUSES, SUB_STATUSES, SIM_VALUES, REPEATS, MS_KINDS, ENTRY_STATUSES, IMPORT_FIELDS, SUB_FIELDS, YN, RIGHTS_KINDS,
+    POEM_STATUSES, SUB_STATUSES, SIM_VALUES, REPEATS, MS_KINDS, ENTRY_STATUSES, IMPORT_FIELDS, SUB_FIELDS, YN, RIGHTS_KINDS, THEMES,
     uid, isDate, daysBetween, addDays, addYears, todayLocal,
     emptyData, normalize, normalizePoem, normalizeJournal, normalizeSubmission, normalizeManuscript, normalizeEntry, normalizeSettings, normalizeRights,
     poemById, journalById, manuscriptById, entryById, activePoemIds, acceptedPoemIdsOf, placement, pendingSubsFor, poemState,

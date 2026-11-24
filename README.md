@@ -58,6 +58,22 @@ The **Import** page takes two kinds of CSV file (save from Excel as "CSV UTF-8",
 
 You match each column to a field and see every row before anything is added. Dates like 3/4/2026 are read month first. Several titles in one cell can be split with semicolons.
 
+## Settings
+
+The last item in the sidebar. It has:
+
+- **Theme:** match Windows, light, or dark.
+- **Title bar:** Pen Pal's own bar (the default), or the standard Windows one. The standard one keeps Windows' Snap layouts (hover the maximize button) and Win+arrow snapping; a custom bar can't offer those. The change applies the next time you open Pen Pal. With Pen Pal's bar, drag the name area to move the window, double-click it to maximize, and drag any edge to resize.
+- **Reminders:** how many days to wait before suggesting a follow-up (when Pen Pal doesn't know a journal's usual reply time), and how far ahead the Desk lists deadlines.
+- **Updates:** see below.
+- **Your data:** where it's saved, with a button to open the folder.
+
+## Updates
+
+Settings has **Check for updates**, and Pen Pal also checks on its own when it opens (turn that off in Settings). When a new version is out, the Desk says so. **Download and install** fetches the new `PenPal.exe` from this project's GitHub releases. It checks that the file is the published size and matches the sha256 fingerprint GitHub lists for it. Then **Restart and update** swaps it in and reopens Pen Pal. Your data isn't touched. Only the program file changes.
+
+Pen Pal needs to be able to write to the folder `PenPal.exe` sits in (your Desktop or Documents is fine; Program Files is not). If it can't, it links you to the releases page instead.
+
 ## Undo
 
 **Undo** and **Redo** (top right), or Ctrl+Z and Ctrl+Y when you're not typing in a box, step back through this session's changes.
@@ -71,12 +87,14 @@ You match each column to a field and see every row before anything is added. Dat
 
 - With Python 3.8+ and `pip install pywebview`: `python penpal.py` opens the app window. Without pywebview it opens in your browser. `start.bat` does this for you, or runs `PenPal.exe` if it's in the folder.
 - `python server.py` is the plain-library server on its own (browser only).
-- `build-exe.bat` builds `PenPal.exe` locally. Normally GitHub builds it: every push runs the tests, builds the exe and self-checks it on Windows. When `APP_VERSION` in server.py changes, that push also publishes a release (v2.0.0, v2.1.0, ...).
-- Tests: `node --test tests/logic.test.js`, `python -m unittest tests/test_server.py`, and the optional browser test `python tests/browser_smoke.py` (needs Playwright and Chrome).
+- `build-exe.bat` builds `PenPal.exe` locally. Pen Pal's own title bar needs pywebview 5 or newer (frameless windows with drag regions). Normally GitHub builds it: every push runs the tests, builds the exe and self-checks it on Windows. When `APP_VERSION` in server.py changes, that push also publishes a release (v2.0.0, v2.1.0, ...).
+- Tests: `node --test tests/logic.test.js`, `python -m unittest discover -s tests -p "test_*.py"` (server and updater), and the optional browser test `python tests/browser_smoke.py` (needs Playwright and Chrome).
 
 ## Troubleshooting
 
 - **The page says it could not load your data:** Pen Pal never overwrites a data file it can't read. Copy the newest file from the `backups` folder over `tracker.json`.
 - **SmartScreen blocks it:** More info, then Run anyway. The app is unsigned.
 - **The window is blank:** Windows 10 machines without the Edge WebView2 runtime need it from Microsoft (search "WebView2 Runtime"). Or run `PenPal.exe --browser` to use your browser.
+- **The update says it can't install:** move `PenPal.exe` somewhere you can write to (Desktop, Documents), or download the new version from the releases page.
+- **You want Windows' snapping back:** Settings, Title bar, Standard Windows title bar, then reopen Pen Pal.
 - **The second folder says the last copy failed:** the drive may be unplugged or the folder renamed. Your data is still saved.

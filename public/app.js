@@ -6,7 +6,10 @@
   let data = null;
   let tab = 'desk';
   let dir = { checked: '', about: '', journals: [] };
-  let info = { dataFolder: '', desktop: false, version: '' };
+  let info = { dataFolder: '', desktop: false, version: '', frameless: false, titleBar: 'custom', canInstall: false };
+  // Update check and download state, shown on Settings and the Desk.
+  const upd = { checking: false, result: null, error: '', dl: null, applying: false };
+  const RELEASES = 'https://github.com/ThatOneGuyCpr/pen-pal/releases';
   let server = { folder: '', folderSet: false, lastCopyOk: null, lastCopyAt: '', lastError: '' };
   const hist = L.createHistory(50);
   let lastSnap = '';
@@ -230,6 +233,7 @@
     calendar: '<rect x="3.5" y="5" width="17" height="15" rx="1.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
     import: '<path d="M12 3v11M7.5 9.5L12 14l4.5-4.5"/><path d="M4 15v4.5h16V15"/>',
     export: '<path d="M12 14V3M7.5 7.5L12 3l4.5 4.5"/><path d="M4 15v4.5h16V15"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   };
   const icon = (k, size) => '<svg width="' + (size || 18) + '" height="' + (size || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON[k] + '</svg>';
   const APPMARK = '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="1.5" y="5" width="21" height="14" rx="2" fill="currentColor"/><path d="M2.5 6.5l9.5 6.8 9.5-6.8" fill="none" stroke="var(--side)" stroke-width="1.6" stroke-linejoin="round"/><path d="M15.5 16.5h4.5" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round"/></svg>';
@@ -245,12 +249,14 @@
     ['calendar', 'Calendar'],
     ['import', 'Import'],
     ['export', 'Export and backup'],
+    ['settings', 'Settings'],
   ];
   function navCount(k) {
     if (k === 'journals') return data.journals.length || '';
     if (k === 'poems') return data.poems.length || '';
     if (k === 'subs') { const n = data.submissions.filter((s) => s.status === 'pending').length; return n ? n + ' out' : ''; }
     if (k === 'books') return data.manuscripts.length || '';
+    if (k === 'settings') return upd.result && upd.result.newer ? 'update' : '';
     return '';
   }
   function backupLine() {
@@ -259,16 +265,25 @@
     if (server.folderSet) return ['Second folder set', false];
     return [data.settings.lastBackupDownload ? 'Backup file saved ' + fmtDate(data.settings.lastBackupDownload) : 'No second copy yet', false];
   }
+  function applyTheme() {
+    const t = data.settings.theme;
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    else delete document.documentElement.dataset.theme;
+  }
   function render() {
+    applyTheme();
+    renderNav();
+    const v = { desk: viewDesk, find: viewFind, subs: viewSubs, poems: viewPoems, journals: viewJournals, books: viewBooks, budget: viewBudget, insights: viewInsights, calendar: viewCalendar, import: viewImport, export: viewExport, settings: viewSettings }[tab];
+    $('#view').innerHTML = v();
+    syncUndoButtons();
+  }
+  function renderNav() {
     const [bl, bad] = backupLine();
     $('#nav').innerHTML = '<div class="brand">' + APPMARK + '<span>Pen Pal</span></div>' +
       TABS.map((t) => '<button class="navitem" data-tab="' + t[0] + '"' + (t[0] === tab ? ' aria-current="page"' : '') + '><span class="dot"></span>' +
         icon(t[0]) + '<span>' + t[1] + '</span>' + (navCount(t[0]) !== '' ? '<span class="count">' + navCount(t[0]) + '</span>' : '') + '</button>').join('') +
       '<div class="navfoot"><span id="saveState" role="status" aria-live="polite" class="' + (saveBad ? 'bad' : '') + '">' + esc(saveText) + '</span>' +
       '<span id="backupState" class="' + (bad ? 'bad' : '') + '">' + esc(bl) + '</span></div>';
-    const v = { desk: viewDesk, find: viewFind, subs: viewSubs, poems: viewPoems, journals: viewJournals, books: viewBooks, budget: viewBudget, insights: viewInsights, calendar: viewCalendar, import: viewImport, export: viewExport }[tab];
-    $('#view').innerHTML = v();
-    syncUndoButtons();
   }
   function pageHead(kicker, title, buttons) {
     return '<header class="pagehead"><div><span class="kicker">' + esc(kicker) + '</span><h1>' + esc(title) + '</h1></div>' +
@@ -330,7 +345,7 @@
       const why = x.queried ? 'You followed up on ' + fmtDate(x.queried) + ' and have not heard back.'
         : x.basis === 'history' ? 'Your past answers from them took about ' + x.expected + ' days.'
           : x.basis === 'journal' ? 'They say they usually answer in about ' + x.expected + ' days.'
-            : 'That is past the usual 90 days.';
+            : 'That is past the ' + x.expected + ' days you set in Settings for following up.';
       rows.push(needRow('Follow up', 'blue', esc(jn) + ' has had <b>' + esc(titlesOf(L.activePoemIds(x.sub))) + '</b> for ' + x.waiting + ' days. ' + esc(why),
         sbtn('Copy query', 'copy-query', attr('id', x.sub.id)) + sbtn('I followed up', 'queried', attr('id', x.sub.id)) + sbtn('Snooze', 'snooze-query', attr('id', x.sub.id)) + sbtn('Update', 'status-sub', attr('id', x.sub.id))));
     }
@@ -338,6 +353,9 @@
       rows.push(needRow('Reprint', 'muted', '<b>' + esc(q(x.poem.title)) + '</b> comes out of its exclusive period' + (x.placedAt ? ' with ' + esc(x.placedAt) : '') +
         ' on ' + fmtDate(x.date) + ' (' + dueWords(x.daysAway) + '). After that you can offer it as a reprint where they take them.',
         sbtn('Open poem', 'poem-history', attr('id', x.poem.id))));
+    }
+    if (upd.result && upd.result.newer) {
+      rows.push(needRow('Update', 'blue', 'Pen Pal ' + esc(upd.result.latest) + ' is out. You have ' + esc(upd.result.current) + '.', sbtn('See what changed', 'go-settings')));
     }
     const nudge = L.backupReminder(data, t, server);
     if (nudge) {
@@ -349,15 +367,16 @@
     let left = '<section class="card"><div class="cardhead"><h2>Needs you</h2><span class="sub">' + (rows.length ? rows.length + ' thing' + (rows.length === 1 ? '' : 's') : '') + '</span></div>' +
       (rows.length ? '<ul class="needs">' + rows.join('') + '</ul>' : '<p class="quiet-line">Nothing needs you right now.</p>') + '</section>';
 
-    const soon = L.upcomingDeadlines(data, t, 60);
-    left += '<section class="card"><div class="cardhead"><h2>Coming up</h2><span class="sub">next 60 days</span></div>' +
+    const days = data.settings.deskDays;
+    const soon = L.upcomingDeadlines(data, t, days);
+    left += '<section class="card"><div class="cardhead"><h2>Coming up</h2><span class="sub">next ' + days + ' days</span></div>' +
       (soon.length ? '<ul class="uplist">' + soon.map((e) => {
         const wd = new Date(e.date + 'T00:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short' });
         const md = new Date(e.date + 'T00:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
         const note = e.kind === 'deadline' ? (e.entry.fee ? money(e.entry.fee) + ' fee' : rel(e.daysAway)) : e.recurring && e.kind === 'opens' ? 'every year' : rel(e.daysAway);
         const btn = e.kind === 'closes' ? sbtn('Send poems', 'new-sub', attr('journal', e.journal.id)) : e.kind === 'deadline' ? sbtn('Open', 'edit-entry', attr('id', e.entry.id)) : '';
         return '<li><div class="d">' + md + '<span>' + wd + '</span></div><div>' + deadlineChip(e) + '</div><div class="n">' + esc(e.name) + ' <span class="sub" style="font-weight:400">' + esc(note) + '</span></div><div>' + btn + '</div></li>';
-      }).join('') + '</ul>' : '<p class="quiet-line">Nothing opens, closes or is due in the next 60 days. Dates come from your journals and manuscript entries.</p>') + '</section>';
+      }).join('') + '</ul>' : '<p class="quiet-line">Nothing opens, closes or is due in the next ' + days + ' days. Dates come from your journals and manuscript entries.</p>') + '</section>';
 
     // right column: budget and what is out
     const year = Number(t.slice(0, 4));
@@ -545,6 +564,153 @@
       '<label class="btn" style="margin:0;font-weight:600">Choose a CSV of journals<input id="importFile" type="file" accept=".csv,.tsv,.txt,text/csv" hidden></label></section>' +
       '</div><div><section class="card note"><h3>From Excel or Google Sheets</h3><p style="margin:0;font-size:14px">Excel: File, Save As, "CSV UTF-8". Google Sheets: File, Download, "Comma-separated values". ' +
       'Dates like 3/4/2026 are read month first. Titles in one cell can be split with a semicolon: Salt Line; Low Tide.</p></section></div></div>';
+  }
+
+  // ----- Settings
+  function updateCard() {
+    const r = upd.result, d = upd.dl;
+    let body = '<p style="margin:0 0 4px">You have Pen Pal <b>' + esc(info.version || '') + '</b>.</p>';
+    if (upd.checking) body += '<p class="hint">Checking GitHub…</p>';
+    else if (upd.error) body += '<p class="hint" style="color:var(--red)">' + esc(upd.error) + '</p>';
+    else if (r && r.error) body += '<p class="hint" style="color:var(--red)">' + esc(r.error) + '</p>';
+    else if (r && !r.newer) body += '<p class="hint">You have the latest version.</p>';
+    else if (r && r.newer) {
+      body += '<p style="margin:10px 0 0"><b>Pen Pal ' + esc(r.latest) + ' is available</b>' + (r.size ? ' <span class="sub">(' + (r.size / 1048576).toFixed(1) + ' MB)</span>' : '') + '.</p>' +
+        (r.notes ? '<div class="notes">' + esc(r.notes) + '</div>' : '');
+      if (!r.canInstall) {
+        body += '<p class="hint" style="margin-top:10px">' + (info.desktop ? 'Pen Pal cannot write to the folder it is in, so it cannot replace itself. ' : 'Updates install themselves in the PenPal.exe app. ') +
+          'Download the new version from the releases page.</p><a class="btn small" href="' + esc(r.page || RELEASES) + '" target="_blank" rel="noopener noreferrer">Open the releases page</a>';
+      } else if (d && d.state === 'downloading') {
+        const pct = d.total ? Math.round((d.got / d.total) * 100) : 0;
+        body += '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="Download progress"><span style="width:' + pct + '%"></span></div><p class="sub" style="margin:0">Downloading… ' + pct + '%</p>';
+      } else if (d && d.state === 'ready') {
+        body += '<p style="margin:10px 0 8px">Downloaded and checked. Pen Pal will close and open again on the new version. Your data stays where it is.</p>' +
+          '<button class="primary" data-act="update-apply"' + (upd.applying ? ' disabled' : '') + '>' + (upd.applying ? 'Restarting…' : 'Restart and update') + '</button>';
+      } else {
+        if (d && d.state === 'error') body += '<p class="hint" style="color:var(--red)">' + esc(d.error) + '</p>';
+        body += '<div class="btnrow" style="margin-top:10px"><button class="primary" data-act="update-download">Download and install</button></div>';
+      }
+    }
+    body += '<div class="btnrow" style="margin-top:12px"><button data-act="update-check"' + (upd.checking ? ' disabled' : '') + '>Check for updates</button>' +
+      '<a class="btn quiet" href="' + RELEASES + '" target="_blank" rel="noopener noreferrer">All releases</a></div>' +
+      '<label class="check" style="margin-top:12px"><input id="checkUpdates" type="checkbox"' + (data.settings.checkUpdates ? ' checked' : '') + '> Check for updates when Pen Pal opens</label>' +
+      '<p class="hint" style="margin:0">This asks GitHub for the newest release. Nothing about you or your poems is sent. Each download is checked against the fingerprint GitHub publishes before it is installed.</p>';
+    return '<section class="card" id="updateCard"><h2>Updates</h2>' + body + '</section>';
+  }
+  function viewSettings() {
+    const st = data.settings;
+    const radio = (name, value, label, checked) => '<label><input type="radio" name="' + name + '" value="' + value + '"' + (checked ? ' checked' : '') + '>' + label + '</label>';
+    const canOpen = window.pywebview && window.pywebview.api && window.pywebview.api.open_data_folder;
+    const left = '<section class="card"><h2>Appearance</h2><h3>Theme</h3><div class="choice" role="radiogroup" aria-label="Theme">' +
+      radio('theme', 'system', 'Match Windows', st.theme === 'system') + radio('theme', 'light', 'Light', st.theme === 'light') + radio('theme', 'dark', 'Dark', st.theme === 'dark') + '</div>' +
+      '<h3 style="margin-top:16px">Title bar</h3><div class="choice" role="radiogroup" aria-label="Title bar">' +
+      radio('titleBar', 'custom', 'Pen Pal title bar', info.titleBar !== 'windows') + radio('titleBar', 'windows', 'Standard Windows title bar', info.titleBar === 'windows') + '</div>' +
+      '<p class="hint">' + (info.desktop ? 'Takes effect the next time you open Pen Pal. ' : 'This applies to the PenPal.exe app. ') +
+      'The standard Windows bar keeps Snap layouts (hover the maximize button) and Win+arrow snapping, which a custom bar cannot offer.</p></section>' +
+      '<section class="card"><h2>Reminders</h2>' +
+      '<label>Suggest a follow-up after this many days<input id="followUpDays" type="number" min="14" max="365" step="1" value="' + st.followUpDays + '"></label>' +
+      '<p class="hint" style="margin-top:-6px">Used when Pen Pal does not know a journal\'s usual reply time from your history or your notes on it.</p>' +
+      '<label>Show deadlines on the Desk for the next (days)<input id="deskDays" type="number" min="7" max="180" step="1" value="' + st.deskDays + '"></label>' +
+      '<button class="primary" data-act="save-reminders">Save</button></section>';
+    const right = updateCard() +
+      '<section class="card"><h2>Your data</h2><p class="hint">Saved in <code>' + esc(info.dataFolder || 'the data folder') + '</code>, with a daily copy in its backups folder.</p>' +
+      '<div class="btnrow">' + (canOpen ? '<button class="small" data-act="open-data-folder">Open the data folder</button>' : '') + '<button class="small" data-tab="export">Backups and second folder</button></div></section>' +
+      '<section class="card"><h2>About</h2><p style="margin:0;font-size:14px">Pen Pal ' + esc(info.version || '') + '. Your poems stay in your own files; Pen Pal keeps titles and notes.<br>' +
+      'Journal directory: ' + dir.journals.length + ' journals, checked ' + (dir.checked ? fmtDate(dir.checked) : 'by hand') + '.</p>' +
+      '<p style="margin:10px 0 0"><a href="https://github.com/ThatOneGuyCpr/pen-pal" target="_blank" rel="noopener noreferrer">Pen Pal on GitHub</a></p></section>';
+    return pageHead('Pen Pal ' + (info.version || ''), 'Settings') + '<div class="desk"><div>' + left + '</div><div>' + right + '</div></div>';
+  }
+  // Redraw only what shows update state, so a page you are typing in is left alone.
+  function redrawUpdates() {
+    if (tab === 'settings') { const el = $('#updateCard'); if (el) el.outerHTML = updateCard(); renderNav(); }
+    else if (tab === 'desk') render();
+    else renderNav();
+  }
+  async function checkForUpdates(force, quiet) {
+    upd.checking = true;
+    upd.error = '';
+    if (!quiet) redrawUpdates();
+    try {
+      const r = await fetch('/api/update' + (force ? '?force=1' : ''));
+      upd.result = await r.json();
+      upd.dl = upd.result.download || null;
+      if (upd.dl && upd.dl.state === 'downloading') pollDownload();
+    } catch (e) {
+      if (!quiet) upd.error = 'Could not check for updates. Is Pen Pal still running?';
+    }
+    upd.checking = false;
+    if (!quiet || (upd.result && upd.result.newer)) redrawUpdates();
+  }
+  async function pollDownload() {
+    for (;;) {
+      await new Promise((res) => setTimeout(res, 600));
+      try { upd.dl = await (await fetch('/api/update/status')).json(); } catch (e) { break; }
+      if (tab === 'settings') redrawUpdates();
+      if (upd.dl.state !== 'downloading') break;
+    }
+  }
+  async function putJSON(url, body) {
+    const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Pen-Pal': '1' }, body: JSON.stringify(body || {}) });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(b.error || 'HTTP ' + r.status);
+    return b;
+  }
+
+  // ----- the desktop window's own title bar
+  const desktopApi = () => (window.pywebview && window.pywebview.api) || null;
+  function setupTitleBar() {
+    if (!info.frameless || document.body.classList.contains('framed')) return;
+    document.body.classList.add('framed');
+    $('#titlebar').hidden = false;
+    $('#resizers').hidden = false;
+    const setMax = (isMax) => {
+      document.body.classList.toggle('maxed', !!isMax);
+      $('#tbDrag').classList.toggle('pywebview-drag-region', !isMax);
+      $('#tbMax').setAttribute('aria-label', isMax ? 'Restore' : 'Maximize');
+      $('#tbMax').innerHTML = isMax
+        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="8.5" width="10" height="10" rx="1"/><path d="M8.5 8.5V5.5h10v10h-3"/></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="13" height="13" rx="1"/></svg>';
+    };
+    const toggleMax = async () => { const a = desktopApi(); if (a) setMax(await a.win_toggle_max()); };
+    $('#tbMin').addEventListener('click', () => { const a = desktopApi(); if (a) a.win_minimize(); });
+    $('#tbMax').addEventListener('click', toggleMax);
+    $('#tbDrag').addEventListener('dblclick', toggleMax);
+    $('#tbClose').addEventListener('click', () => { const a = desktopApi(); if (a) a.win_close(); });
+    // Edges: drag to resize. A frameless window has no resize border of its own.
+    let rs = null;
+    const send = async () => {
+      if (!rs || rs.busy || !rs.next) return;
+      rs.busy = true;
+      const b = rs.next;
+      rs.next = null;
+      try { await desktopApi().win_set_bounds(b[0], b[1], b[2], b[3]); } catch (e) { /* ignore */ }
+      if (rs) { rs.busy = false; send(); }
+    };
+    $('#resizers').addEventListener('pointerdown', async (e) => {
+      const edge = e.target.dataset && e.target.dataset.edge;
+      const a = desktopApi();
+      if (!edge || !a) return;
+      e.preventDefault();
+      e.target.setPointerCapture(e.pointerId);
+      rs = { edge, sx: e.screenX, sy: e.screenY, start: null, next: null, busy: false };
+      rs.start = await a.win_bounds();
+    });
+    $('#resizers').addEventListener('pointermove', (e) => {
+      if (!rs || !rs.start) return;
+      let [x, y, w, h] = rs.start;
+      const dx = e.screenX - rs.sx, dy = e.screenY - rs.sy;
+      if (rs.edge.includes('e')) w += dx;
+      if (rs.edge.includes('s')) h += dy;
+      if (rs.edge.includes('w')) { const nw = Math.max(900, w - dx); x += w - nw; w = nw; }
+      if (rs.edge.includes('n')) { const nh = Math.max(620, h - dy); y += h - nh; h = nh; }
+      rs.next = [x, y, Math.max(900, w), Math.max(620, h)];
+      send();
+    });
+    const end = () => { rs = null; };
+    $('#resizers').addEventListener('pointerup', end);
+    $('#resizers').addEventListener('pointercancel', end);
+    const sync = async () => { const a = desktopApi(); if (a && a.win_is_max) setMax(await a.win_is_max()); };
+    if (desktopApi()) sync(); else window.addEventListener('pywebviewready', sync, { once: true });
   }
 
   // ----- Journals
@@ -1410,6 +1576,21 @@
     'withdraw': (d) => { L.withdrawPoem(data, d.sub, d.poem, today()); commit('Marked withdrawn'); toast('Marked withdrawn'); },
     'copy-withdraw': (d) => copyText(withdrawText(d.sub, d.poem)),
     'poem-history': (d) => poemHistoryDialog(d.id),
+    'go-settings': () => { tab = 'settings'; render(); $('#view').focus(); },
+    'update-check': () => checkForUpdates(true, false),
+    'update-download': async () => {
+      try { upd.dl = await putJSON('/api/update/download'); redrawUpdates(); pollDownload(); } catch (e) { upd.error = e.message; redrawUpdates(); }
+    },
+    'update-apply': async () => {
+      upd.applying = true;
+      redrawUpdates();
+      try { await putJSON('/api/update/apply'); toast('Restarting on the new version…'); } catch (e) { upd.applying = false; upd.error = e.message; redrawUpdates(); }
+    },
+    'save-reminders': () => {
+      data.settings = L.normalizeSettings(Object.assign({}, data.settings, { followUpDays: $('#followUpDays').value, deskDays: $('#deskDays').value }));
+      commitQuiet();
+      toast('Saved');
+    },
     'edit-rights': (d) => rightsDialog(d.id),
     'copy-credit': (d) => { const p = L.poemById(data, d.id); if (p) copyText(p.rights.credit || L.suggestedCredit(data, p)); },
     'find-toggle': (d) => { ui.find[d.key] = !ui.find[d.key]; render(); },
@@ -1492,7 +1673,18 @@
   document.addEventListener('change', (e) => {
     if (e.target.id === 'subFilter') { ui.subFilter = e.target.value; render(); }
     else if (e.target.id === 'poemFilter') { ui.poemFilter = e.target.value; render(); }
-    else if (e.target.id === 'importSubsFile') {
+    else if (e.target.name === 'theme') {
+      data.settings = L.normalizeSettings(Object.assign({}, data.settings, { theme: e.target.value }));
+      commitQuiet();
+    } else if (e.target.name === 'titleBar') {
+      putJSON('/api/settings', { titleBar: e.target.value }).then((b) => {
+        info.titleBar = b.titleBar;
+        toast(info.desktop ? 'Saved. You will see it the next time you open Pen Pal.' : 'Saved for the Pen Pal app.');
+      }, (err) => toast('Could not save: ' + err.message));
+    } else if (e.target.id === 'checkUpdates') {
+      data.settings = L.normalizeSettings(Object.assign({}, data.settings, { checkUpdates: e.target.checked }));
+      commitQuiet();
+    } else if (e.target.id === 'importSubsFile') {
       const f = e.target.files[0];
       e.target.value = '';
       if (f) f.text().then(subImportDialog, () => toast('Could not read that file.'));
@@ -1546,7 +1738,9 @@
       try { const i = await fetch('/api/info'); if (i.ok) info = await i.json(); } catch (e) { /* optional */ }
       setStatus('Saved on this PC');
       render();
+      setupTitleBar();
       refreshServer();
+      if (data.settings.checkUpdates) checkForUpdates(false, true);
     } catch (e) {
       $('#view').innerHTML = '<div class="card alert"><h2>Could not load your data</h2><p>' + esc(e.message) +
         '</p><p>Nothing has been changed. If Pen Pal was closed in the background, start it again.</p></div>';

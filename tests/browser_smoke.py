@@ -6,7 +6,9 @@ fields), starts server.py there and drives every screen in a real browser. Your 
 The desktop window (penpal.py) shows this same page, so this covers the app's screens too.
 """
 import datetime
+import http.server
 import json
+import threading
 import os
 import shutil
 import subprocess
@@ -69,7 +71,24 @@ def main():
         f.write("Market,Piece,Date Sent,Status,Response Date,Fee\nFernhouse Review,Salt Line; New Poem,3/3/2026,Declined,4/18/2026,$3\n"
                 "Fernhouse Review,Low Tide,spring 2025,Withdrawn,,\nGull and Pine,Mangrove,5/5/2026,Never responded,,\n")
 
-    srv = subprocess.Popen([sys.executable, "server.py", "--no-browser", "--port", str(PORT)], cwd=app, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # A local stand-in for GitHub's "latest release" answer, so the update check runs without the network.
+    class FakeGitHub(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = json.dumps({"tag_name": "v9.9.9", "body": "Big new things.", "html_url": "https://github.com/ThatOneGuyCpr/pen-pal/releases/tag/v9.9.9",
+                               "assets": [{"name": "PenPal.exe", "size": 1234, "digest": "sha256:" + "0" * 64,
+                                           "browser_download_url": "https://github.com/ThatOneGuyCpr/pen-pal/releases/download/v9.9.9/PenPal.exe"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    gh = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHub)
+    threading.Thread(target=gh.serve_forever, daemon=True).start()
+    env = dict(os.environ, PENPAL_UPDATE_API="http://127.0.0.1:%d/latest" % gh.server_address[1])
+    srv = subprocess.Popen([sys.executable, "server.py", "--no-browser", "--port", str(PORT)], cwd=app, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     errors = []
     try:
         for _ in range(50):
@@ -105,7 +124,11 @@ def main():
             page.goto(BASE)
             page.wait_for_selector(".pagehead")
             check(page.title() == "Pen Pal" and "Your desk" in view(), "opens on the Desk, named Pen Pal")
-            check(page.locator("#nav .navitem").count() == 11, "eleven sections in the sidebar")
+            check(page.locator("#nav .navitem").count() == 12, "twelve sections in the sidebar")
+            check(page.locator("#titlebar").is_hidden(), "no custom title bar in a plain browser")
+            page.wait_for_function("document.querySelector('#nav [data-tab=settings] .count')", timeout=8000)
+            check(page.inner_text('#nav [data-tab="settings"] .count') == "update", "update found at start-up shows in the sidebar")
+            check("Pen Pal 9.9.9 is out" in view(), "update notice on the Desk")
             tab("poems")
             check(page.locator("#view tbody tr").count() == 6, "old Poetry Tracker data loads: 6 poems")
 
@@ -317,8 +340,99 @@ def main():
             check(not any(p["title"] == "From tab two" for p in api()["poems"]), "second window cannot overwrite the first")
             page2.close()
 
+            # ---- settings: theme, reminders, title bar choice, updates
+            tab("settings")
+            check("Settings" in view() and "You have Pen Pal" in view(), "settings page")
+            page.check('input[name=theme][value=dark]')
+            saved()
+            check(page.evaluate("document.documentElement.dataset.theme") == "dark" and api()["settings"]["theme"] == "dark", "dark theme applies and saves")
+            page.check('input[name=theme][value=system]')
+            saved()
+            check(page.evaluate("document.documentElement.dataset.theme") is None, "back to matching Windows")
+            page.fill("#followUpDays", "30")
+            page.fill("#deskDays", "21")
+            page.click('button:has-text("Save")')
+            saved()
+            check(api()["settings"]["followUpDays"] == 30 and api()["settings"]["deskDays"] == 21, "reminder settings save")
+            tab("desk")
+            check("next 21 days" in view(), "Desk uses the deadline window setting")
+            tab("settings")
+            page.check('input[name=titleBar][value=windows]')
+            page.wait_for_selector("#toast.show")
+            check(json.load(urllib.request.urlopen(BASE + "api/settings"))["titleBar"] == "windows", "title bar choice saved for next launch")
+            page.check('input[name=titleBar][value=custom]')
+            page.wait_for_timeout(300)
+            page.click('button:has-text("Check for updates")')
+            page.wait_for_selector("text=Pen Pal 9.9.9 is available")
+            card = page.inner_text("#updateCard")
+            check("Big new things." in card and "Open the releases page" in card, "update details, and a releases link when this copy cannot install")
+            page.uncheck("#checkUpdates")
+            saved()
+            check(api()["settings"]["checkUpdates"] is False, "start-up check can be turned off")
+
+            # ---- the desktop window's own title bar, with a stand-in for the desktop bridge
+            dpage = ctx.new_page()
+            dpage.on("pageerror", lambda e: errors.append(str(e)))
+            dpage.add_init_script("""
+              window.__calls = [];
+              let maxed = false;
+              const rec = (n) => (...a) => { window.__calls.push([n, ...a]); return Promise.resolve(); };
+              window.pywebview = { api: {
+                win_minimize: rec('min'), win_close: rec('close'), open_data_folder: rec('open'),
+                win_bounds: () => Promise.resolve([100, 100, 1280, 900]),
+                win_set_bounds: rec('bounds'),
+                win_is_max: () => Promise.resolve(maxed),
+                win_toggle_max: () => { maxed = !maxed; window.__calls.push(['max', maxed]); return Promise.resolve(maxed); },
+                save_file: (name, text) => { window.__calls.push(['save', name, text.length]); return Promise.resolve('C:/Users/me/' + name); },
+              } };
+            """)
+
+            def fake_info(route):
+                r = route.fetch()
+                body = r.json()
+                body.update(desktop=True, frameless=True)
+                route.fulfill(response=r, json=body)
+
+            dpage.route("**/api/info", fake_info)
+            dpage.goto(BASE)
+            dpage.wait_for_selector(".pagehead")
+            dpage.wait_for_selector("#titlebar:not([hidden])")
+            check(dpage.locator(".brand").is_hidden(), "custom title bar shows, sidebar name hides")
+            dpage.click("#tbMin")
+            dpage.click("#tbMax")
+            dpage.wait_for_function("document.body.classList.contains('maxed')")
+            check(dpage.get_attribute("#tbMax", "aria-label") == "Restore" and dpage.locator("#resizers").is_hidden(), "maximize swaps to restore and hides the resize edges")
+            check("pywebview-drag-region" not in dpage.get_attribute("#tbDrag", "class"), "no dragging while maximized")
+            dpage.dblclick("#tbDrag")
+            dpage.wait_for_function("!document.body.classList.contains('maxed')")
+            dpage.mouse.move(1279, 450)
+            dpage.mouse.down()
+            dpage.mouse.move(1329, 450, steps=4)
+            dpage.mouse.up()
+            dpage.wait_for_timeout(200)
+            dpage.mouse.move(640, 0)
+            dpage.mouse.down()
+            dpage.mouse.move(640, 40, steps=2)
+            dpage.mouse.up()
+            dpage.wait_for_timeout(200)
+            calls = dpage.evaluate("window.__calls")
+            bounds = [c for c in calls if c[0] == "bounds"]
+            check(["min"] in calls and ["max", True] in calls and ["max", False] in calls, "minimize and maximize reach the window")
+            check(any(c[3] == 1330 and c[1] == 100 for c in bounds), "dragging the right edge widens the window: " + str(bounds[-3:]))
+            check(any(c[2] == 140 and c[4] == 860 for c in bounds), "dragging the top edge moves the window down and makes it shorter")
+            dpage.click('#nav [data-tab="export"]')
+            dpage.click('button:has-text("Save a backup file")')
+            dpage.wait_for_selector("#toast:has-text('Saved to')")
+            check(any(c[0] == "save" and c[1].startswith("pen-pal-backup-") for c in dpage.evaluate("window.__calls")), "downloads go through the Windows Save dialog")
+            dpage.click('#nav [data-tab="settings"]')
+            check(dpage.locator('button:has-text("Open the data folder")').count() == 1, "open-folder button in the app")
+            dpage.screenshot(path=os.path.join(work, "settings-desktop.png"))
+            dpage.click("#tbClose")
+            check(["close"] in dpage.evaluate("window.__calls"), "close button reaches the window")
+            dpage.close()
+
             # ---- text hygiene, dark mode, phone width
-            tabs = ["desk", "find", "journals", "poems", "subs", "books", "budget", "insights", "calendar", "import", "export"]
+            tabs = ["desk", "find", "journals", "poems", "subs", "books", "budget", "insights", "calendar", "import", "export", "settings"]
             for t in tabs:
                 tab(t)
                 check("\u2014" not in page.inner_text("body"), "no em dash on %s" % t)
@@ -335,6 +449,7 @@ def main():
     finally:
         srv.terminate()
         srv.wait(timeout=5)
+        gh.shutdown()
     print("\nscreenshots in", work)
     print("FAILED: %d" % check.failed if check.failed else "ALL PASSED")
     sys.exit(1 if check.failed else 0)

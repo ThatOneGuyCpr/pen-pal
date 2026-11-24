@@ -16,13 +16,14 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 
 APP_NAME = "Pen Pal"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 
 def frozen():
@@ -63,6 +64,9 @@ BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 MAX_BODY = 2 * 1024 * 1024  # 2 MB is far more than a poetry tracker needs
 KEEP_BACKUPS = 14
 DESKTOP = False  # set by penpal.py when the page runs in its own window
+FRAMELESS = False  # set by penpal.py when the window uses Pen Pal's own title bar
+RESTART_HOOK = None  # set by penpal.py: closes the window after an update has been swapped in
+TITLE_BARS = ("custom", "windows")
 
 
 def set_data_dir(path):
@@ -159,13 +163,19 @@ def settings_path():
 
 
 def load_settings():
+    """Settings the program needs before the page loads (or outside the data file)."""
+    out = {"backupFolder": "", "titleBar": "custom"}
     try:
         with open(settings_path(), "r", encoding="utf-8") as f:
             obj = json.load(f)
-        folder = obj.get("backupFolder", "") if isinstance(obj, dict) else ""
-        return {"backupFolder": folder if isinstance(folder, str) else ""}
     except (OSError, ValueError):
-        return {"backupFolder": ""}
+        return out
+    if isinstance(obj, dict):
+        if isinstance(obj.get("backupFolder"), str):
+            out["backupFolder"] = obj["backupFolder"]
+        if obj.get("titleBar") in TITLE_BARS:
+            out["titleBar"] = obj["titleBar"]
+    return out
 
 
 def check_backup_folder(raw):
@@ -208,7 +218,31 @@ def mirror_copy():
 
 
 def settings_view():
-    return {"backupFolder": load_settings()["backupFolder"], "mirror": dict(MIRROR)}
+    st = load_settings()
+    return {"backupFolder": st["backupFolder"], "titleBar": st["titleBar"], "mirror": dict(MIRROR)}
+
+
+# ---- updates (see updater.py) ----
+import updater  # noqa: E402
+
+DOWNLOADER = updater.Downloader()
+UPDATE_CACHE = {"at": 0.0, "result": None}
+
+
+def can_install():
+    """Only the built PenPal.exe updates itself, and only where it is allowed to write its folder."""
+    return frozen() and os.access(app_dir(), os.W_OK)
+
+
+def update_check(force=False):
+    now = time.time()
+    if force or not UPDATE_CACHE["result"] or now - UPDATE_CACHE["at"] > 600:
+        UPDATE_CACHE["result"] = updater.check(APP_VERSION)
+        UPDATE_CACHE["at"] = now
+    res = {k: v for k, v in UPDATE_CACHE["result"].items() if not k.startswith("_")}
+    res["canInstall"] = bool(can_install() and res.get("hasAsset"))
+    res["download"] = DOWNLOADER.snapshot()
+    return res
 
 
 def save_data(obj, path=None):
@@ -286,14 +320,19 @@ class Handler(SimpleHTTPRequestHandler):
             with LOCK:
                 return self._send_json(200, settings_view())
         if self.path.split("?")[0] == "/api/info":
-            return self._send_json(200, {"app": APP_NAME, "version": APP_VERSION, "dataFolder": os.path.dirname(DATA_FILE), "desktop": DESKTOP})
+            return self._send_json(200, {"app": APP_NAME, "version": APP_VERSION, "dataFolder": os.path.dirname(DATA_FILE), "desktop": DESKTOP,
+                                         "frameless": FRAMELESS, "titleBar": load_settings()["titleBar"], "canInstall": can_install()})
+        if self.path.split("?")[0] == "/api/update":
+            return self._send_json(200, update_check(force="force=1" in self.path))
+        if self.path.split("?")[0] == "/api/update/status":
+            return self._send_json(200, DOWNLOADER.snapshot())
         return super().do_GET()
 
     def do_PUT(self):
         if not self._host_ok():
             return self._send_json(403, {"error": "bad host"})
         route = self.path.split("?")[0]
-        if route not in ("/api/data", "/api/settings"):
+        if route not in ("/api/data", "/api/settings", "/api/update/download", "/api/update/apply"):
             return self._send_json(404, {"error": "not found"})
         # Cross-site pages cannot set this header without a CORS preflight, which we never allow.
         if self.headers.get("X-Pen-Pal") != "1" and self.headers.get("X-Poetry-Tracker") != "1":
@@ -312,6 +351,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send_json(400, {"error": "invalid JSON"})
         if route == "/api/settings":
             return self._put_settings(obj)
+        if route == "/api/update/download":
+            return self._update_download()
+        if route == "/api/update/apply":
+            return self._update_apply()
         if not valid_payload(obj):
             return self._send_json(400, {"error": "unexpected data shape"})
 
@@ -333,18 +376,51 @@ class Handler(SimpleHTTPRequestHandler):
         return self._send_json(200, {"rev": obj["rev"]})
 
     def _put_settings(self, obj):
+        """Changes only the keys sent: backupFolder and/or titleBar."""
         if not isinstance(obj, dict) or not isinstance(obj.get("backupFolder", ""), str):
             return self._send_json(400, {"error": "unexpected settings shape"})
-        folder, err = check_backup_folder(obj.get("backupFolder", ""))
-        if err:
-            return self._send_json(400, {"error": err})
+        if "titleBar" in obj and obj["titleBar"] not in TITLE_BARS:
+            return self._send_json(400, {"error": "unexpected title bar"})
         with LOCK:
+            st = load_settings()
+            if "backupFolder" in obj:
+                folder, err = check_backup_folder(obj["backupFolder"])
+                if err:
+                    return self._send_json(400, {"error": err})
+                st["backupFolder"] = folder
+            if "titleBar" in obj:
+                st["titleBar"] = obj["titleBar"]
             try:
-                save_data({"backupFolder": folder}, settings_path())
+                save_data(st, settings_path())
             except OSError as e:
                 return self._send_json(500, {"error": "Could not save settings: %s" % e})
-            mirror_copy()
+            if "backupFolder" in obj:
+                mirror_copy()
             return self._send_json(200, settings_view())
+
+    def _update_download(self):
+        res = update_check()
+        asset = (UPDATE_CACHE["result"] or {}).get("_asset")
+        if not res.get("newer"):
+            return self._send_json(400, {"error": "You already have the latest version."})
+        if not res.get("canInstall") or not asset:
+            return self._send_json(400, {"error": "This copy of Pen Pal cannot update itself. Download the new version from the releases page."})
+        dest = updater.paths_for(sys.executable)["new"]
+        DOWNLOADER.start(asset, res["latest"], dest)
+        return self._send_json(200, DOWNLOADER.snapshot())
+
+    def _update_apply(self):
+        st = DOWNLOADER.snapshot()
+        if st["state"] != "ready" or not can_install():
+            return self._send_json(400, {"error": "The update has not finished downloading."})
+        try:
+            updater.apply_update(sys.executable, st["path"])
+            updater.relaunch(sys.executable)
+        except Exception as e:  # noqa: BLE001
+            return self._send_json(500, {"error": "Could not install the update: %s" % e})
+        if RESTART_HOOK:
+            threading.Timer(0.8, RESTART_HOOK).start()
+        return self._send_json(200, {"ok": True})
 
     def do_POST(self):
         self._send_json(405, {"error": "method not allowed"})

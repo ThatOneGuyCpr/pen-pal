@@ -30,6 +30,7 @@ for _name in ("stdout", "stderr"):
         setattr(sys, _name, open(os.devnull, "w", encoding="utf-8"))
 
 import server  # noqa: E402
+import updater  # noqa: E402
 
 
 def start_server():
@@ -48,11 +49,75 @@ def check_data_file():
         return "Your data file (%s) could not be read: %s\nNothing has been changed. Restore a copy from the backups folder next to it." % (server.DATA_FILE, e)
 
 
+def work_area(window):
+    """The usable part of the window's monitor (without the taskbar), in the logical pixels pywebview uses.
+    A frameless window maximized the normal way covers the taskbar, so Pen Pal maximizes to this instead."""
+    import ctypes  # noqa: PLC0415
+    from ctypes import wintypes  # noqa: PLC0415
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+    form = window.native
+    hwnd = form.Handle.ToInt64()
+    user32 = ctypes.windll.user32
+    user32.MonitorFromWindow.restype = ctypes.c_void_p
+    mon = user32.MonitorFromWindow(ctypes.c_void_p(hwnd), 2)  # MONITOR_DEFAULTTONEAREST
+    mi = MONITORINFO()
+    mi.cbSize = ctypes.sizeof(MONITORINFO)
+    if not user32.GetMonitorInfoW(ctypes.c_void_p(mon), ctypes.byref(mi)):
+        raise OSError("GetMonitorInfo failed")
+    scale = float(getattr(form, "_scale", 1) or 1)
+    r = mi.rcWork
+    return int(r.left / scale), int(r.top / scale), int((r.right - r.left) / scale), int((r.bottom - r.top) / scale)
+
+
 class Api:
     """Functions the page can call through window.pywebview.api (desktop window only)."""
 
     def __init__(self):
         self.window = None
+        self.saved_bounds = None  # where the window was before "maximize"
+
+    # ---- window controls for Pen Pal's own title bar ----
+    def win_minimize(self):
+        self.window.minimize()
+
+    def win_bounds(self):
+        w = self.window
+        return [w.x, w.y, w.width, w.height]
+
+    def win_set_bounds(self, x, y, width, height):
+        w = self.window
+        width, height = max(900, int(width)), max(620, int(height))
+        w.resize(width, height)
+        w.move(int(x), int(y))
+        self.saved_bounds = None
+
+    def win_is_max(self):
+        return self.saved_bounds is not None
+
+    def win_toggle_max(self):
+        w = self.window
+        if self.saved_bounds:
+            x, y, width, height = self.saved_bounds
+            self.saved_bounds = None
+            w.resize(width, height)
+            w.move(x, y)
+            return False
+        before = self.win_bounds()
+        try:
+            x, y, width, height = work_area(w)
+            w.move(x, y)
+            w.resize(width, height)
+        except Exception:  # noqa: BLE001  not Windows, or the native call failed: use the stock maximize
+            w.maximize()
+        self.saved_bounds = before
+        return True
+
+    def win_close(self):
+        wait_for_saves(self.window)
+        self.window.destroy()
 
     def save_file(self, name, text):
         """Native Save dialog, then write the text. Returns the saved path, or '' if cancelled."""
@@ -76,6 +141,18 @@ class Api:
         else:
             subprocess.Popen(["xdg-open", folder])  # noqa: S603, S607
         return folder
+
+
+def wait_for_saves(window):
+    """Give a save that is still in flight a few seconds to finish."""
+    for _ in range(25):
+        try:
+            busy = window.evaluate_js("window.PenPal ? window.PenPal.busy() : false")
+        except Exception:  # noqa: BLE001
+            return
+        if not busy:
+            return
+        time.sleep(0.2)
 
 
 def run_check(out_path):
@@ -110,6 +187,9 @@ def run_check(out_path):
         except Exception as e:  # noqa: BLE001
             ok = False
             lines.append("FAIL pywebview: %s" % e)
+        # Informational only (GitHub rate limits are shared on build machines): can this build reach GitHub?
+        r = updater.check(server.APP_VERSION, timeout=15)
+        lines.append("info update check: " + (r["error"] or "latest release is %s, this is %s" % (r["latest"], r["current"])))
         httpd.shutdown()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -144,6 +224,8 @@ def main():
             print(problem)
         sys.exit(1)
 
+    if server.frozen():
+        threading.Thread(target=updater.cleanup_old, args=(sys.executable,), daemon=True).start()
     server.mirror_copy()
     httpd, url = start_server()
 
@@ -162,20 +244,17 @@ def main():
         return
 
     server.DESKTOP = True
+    # Pen Pal's own title bar unless the person chose the standard Windows one in Settings.
+    frameless = server.load_settings()["titleBar"] == "custom"
+    server.FRAMELESS = frameless
     api = Api()
-    window = webview.create_window("Pen Pal", url, js_api=api, width=1280, height=840, min_size=(900, 620), background_color="#F8F9F9")
+    window = webview.create_window("Pen Pal", url, js_api=api, width=1280, height=840, min_size=(900, 620), background_color="#F8F9F9",
+                                   frameless=frameless, easy_drag=False, shadow=True)
     api.window = window
+    server.RESTART_HOOK = window.destroy  # after an update is swapped in, the new copy is already starting
 
     def on_closing():
-        # Give a save that is still in flight a few seconds to finish before the window goes.
-        for _ in range(25):
-            try:
-                busy = window.evaluate_js("window.PenPal ? window.PenPal.busy() : false")
-            except Exception:  # noqa: BLE001
-                return True
-            if not busy:
-                return True
-            time.sleep(0.2)
+        wait_for_saves(window)
         return True
 
     window.events.closing += on_closing
