@@ -297,7 +297,13 @@ textarea.mono { font: 0.95rem/1.5 var(--serif); min-height: 140px; }
 .result .t .mine { font: 600 12px var(--sans); color: var(--blue); white-space: nowrap; }
 .result .l { display: block; font-size: 13px; color: var(--ink2); margin: 3px 0 9px; font-weight: 400; }
 .result .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.detail { position: sticky; top: 12px; }
+/* The panel beside the directory list follows you down the list. The grid cell is what sticks (a sticky
+   element can only move inside its parent), and it scrolls on its own if it is taller than the window. */
+.find > div:last-child { position: sticky; top: 12px; max-height: calc(100vh - 96px); overflow-y: auto; overscroll-behavior: contain; border-radius: 12px; }
+.bell { color: var(--ink2); }
+.bell svg { margin: 0; }
+.bell.on { background: var(--blue-soft); border-color: var(--blue); color: var(--blue); }
+.bell.on svg path:first-child { fill: currentColor; }
 .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 22px; margin-top: 6px; }
 .fact { display: flex; flex-direction: column; gap: 3px; padding: 10px 0; border-top: 1px solid var(--line); }
 .fact b { font-size: 11.5px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -348,7 +354,7 @@ textarea.mono { font: 0.95rem/1.5 var(--serif); min-height: 140px; }
 
 @media (max-width: 900px) {
   .desk, .find, .budget, .poemgrid { grid-template-columns: 1fr; }
-  .detail { position: static; }
+  .find > div:last-child { position: static; max-height: none; overflow: visible; }
 }
 @media (max-width: 760px) {
   body { height: auto; overflow: visible; display: block; }

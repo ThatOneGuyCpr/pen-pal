@@ -10,11 +10,16 @@ Usage:
   python penpal.py              open the app
   python penpal.py --browser    use the web browser instead of a window
   python penpal.py --check FILE self-test (used by the build): start, load every part, write FILE, exit
+  python penpal.py --remind       check for reading-period reminders and show them, then exit
+                                (what the daily Task Scheduler task runs while Pen Pal is closed)
+  python penpal.py --remind-check FILE
+                                self-test of reminders (used by the build)
   python penpal.py --smoke FILE [--title-bar windows]
                                 open the real window against a throwaway data folder, drive the
                                 title bar controls and a close during a save, write FILE, exit
 """
 import argparse
+import datetime
 import faulthandler
 import json
 import logging
@@ -34,6 +39,7 @@ for _name in ("stdout", "stderr"):
     if getattr(sys, _name) is None:
         setattr(sys, _name, open(os.devnull, "w", encoding="utf-8"))
 
+import notify  # noqa: E402
 import server  # noqa: E402
 import updater  # noqa: E402
 
@@ -41,12 +47,12 @@ LOG_NAME = "pen-pal-log.txt"
 LOG = logging.getLogger("penpal")
 
 
-def setup_logging(folder):
+def setup_logging(folder, name=LOG_NAME):
     """Keep a log of this run (and the one before) in the data folder, so a crash leaves a reason behind.
     It holds start-up details, warnings and errors. Never poem text: request bodies are not logged."""
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, LOG_NAME)
-    prev = os.path.join(folder, "pen-pal-log.prev.txt")
+    path = os.path.join(folder, name)
+    prev = os.path.join(folder, name.replace(".txt", ".prev.txt"))
     try:
         if os.path.exists(path):
             os.replace(path, prev)
@@ -132,6 +138,16 @@ class Api:
     def set_busy(self, busy):
         """The page reports whether it has unsaved edits, so closing never has to ask it (see closing_handler)."""
         self._busy = bool(busy)
+
+    # ---- reading-period reminders (which ones is decided in logic.js) ----
+    def notify(self, alerts):
+        return notify.deliver(alerts, reminder_folder())
+
+    def test_notification(self):
+        return notify.show("Pen Pal notifications are on", "Reminders look like this, a few days before a reading period opens or closes.") or ""
+
+    def sync_reminders(self, want):
+        return sync_task(bool(want))
 
     # ---- window controls for Pen Pal's own title bar ----
     def win_minimize(self):
@@ -229,7 +245,7 @@ def run_check(out_path):
     try:
         server.set_data_dir(tmp)
         httpd, url = start_server()
-        for path in ("", "logic.js", "app.js", "style.css", "directory.json", "fonts/young-serif-400.woff2", "api/data", "api/info", "api/settings"):
+        for path in ("", "logic.js", "app.js", "style.css", "remind.html", "remind.js", "icon.png", "directory.json", "fonts/young-serif-400.woff2", "api/data", "api/info", "api/settings"):
             try:
                 with urllib.request.urlopen(url + path, timeout=10) as r:
                     body = r.read()
@@ -264,6 +280,186 @@ def run_check(out_path):
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return 0 if ok else 1
+
+
+def reminder_folder():
+    return os.path.dirname(server.settings_path())
+
+
+def icon_path():
+    return os.path.join(server.resource_dir(), "public", "icon.png")
+
+
+def sync_task(want):
+    """Add or remove the daily check that runs while Pen Pal is closed. Only the installed exe on Windows
+    has one: from source, the program path would be Python itself."""
+    if not (server.frozen() and notify.is_windows()):
+        return {"supported": False, "on": False, "error": ""}
+    want = want and server.load_settings()["remindClosed"]
+    exe = sys.executable
+    current = notify.task_command()
+    if want:
+        same = current and os.path.normcase(os.path.abspath(current)) == os.path.normcase(os.path.abspath(exe))
+        err = None if same else notify.add_task(exe)
+    else:
+        err = notify.remove_task() if current is not None else None
+    if err:
+        LOG.warning("reminder task: %s", err)
+    return {"supported": True, "on": bool(want and not err), "error": err or ""}
+
+
+class RemindApi:
+    """The bridge for the hidden window that --remind opens: it only hands back the reminders."""
+
+    def __init__(self):
+        self._window = None
+        self._result = None
+
+    def finish(self, alerts, error):
+        try:
+            self._result = {"alerts": alerts or [], "error": error or "", "delivered": notify.deliver(alerts, reminder_folder())}
+        except Exception as e:  # noqa: BLE001
+            self._result = {"alerts": alerts or [], "error": repr(e), "delivered": {"shown": 0, "errors": []}}
+        finally:
+            # Close after this call has returned to the page: closing from inside it leaves a thread
+            # waiting for a page that is gone, and the process would never exit.
+            t = threading.Timer(0.3, self._window.destroy)
+            t.daemon = True
+            t.start()
+
+
+def remind_once(webview, url, limit=90):
+    """Open a hidden window on remind.html, which runs the rules in logic.js and calls finish()."""
+    api = RemindApi()
+    w = webview.create_window("Pen Pal reminders", url + "remind.html", js_api=api, hidden=True, width=420, height=300)
+    api._window = w
+    timer = threading.Timer(limit, w.destroy)
+    timer.daemon = True
+    timer.start()
+    webview.start()
+    timer.cancel()
+    return api._result or {"alerts": [], "error": "timed out", "delivered": {"shown": 0, "errors": []}}
+
+
+def wants_reminders(doc):
+    return any(isinstance(j, dict) and j.get("notify") is True for j in (doc or {}).get("journals") or [])
+
+
+def exit_now(code):
+    """End a reminder run for certain. A run that lingered would also block the next day's run,
+    because the task starts no new copy while one is still going."""
+    logging.shutdown()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:  # noqa: BLE001
+            pass
+    os._exit(code)
+
+
+def run_remind():
+    """What the daily task runs while Pen Pal is closed: show any reminders due, then exit."""
+    folder = os.path.dirname(server.DATA_FILE)
+    setup_logging(folder, "pen-pal-reminders-log.txt")
+    try:
+        doc = server.load_data()
+    except Exception as e:  # noqa: BLE001
+        LOG.error("could not read the data file: %s", e)
+        return 1
+    if not wants_reminders(doc):
+        LOG.info("no journals have reminders on")
+        return 0
+    import webview  # noqa: PLC0415
+
+    notify.register_app(icon_path(), sys.executable if server.frozen() else None)
+    server.DESKTOP = True
+    server.QUIET_OK = True
+    httpd, url = start_server()
+    res = remind_once(webview, url)
+    httpd.shutdown()
+    LOG.info("reminders: %d due, %d shown%s", len(res["alerts"]), res["delivered"]["shown"],
+             "; " + "; ".join([res["error"]] + res["delivered"]["errors"]) if res["error"] or res["delivered"]["errors"] else "")
+    return 1 if res["error"] else 0
+
+
+def run_remind_check(out_path):
+    """Build self-test: reminders end to end against a throwaway data folder, plus (on Windows) the
+    notification registration and the Task Scheduler task under a test name."""
+    import webview  # noqa: PLC0415
+
+    tmp = tempfile.mkdtemp(prefix="penpal-remind-")
+    lines, ok = [], [True]
+
+    def check(cond, label):
+        lines.append(("ok   " if cond else "FAIL ") + label)
+        if not cond:
+            ok[0] = False
+
+    server.set_data_dir(tmp)
+    setup_logging(tmp, "pen-pal-reminders-log.txt")
+    today = datetime.date.today()
+
+    def d(n):
+        return (today + datetime.timedelta(days=n)).isoformat()
+
+    doc = {"rev": 0, "poems": [], "submissions": [{"id": "s1", "poemIds": [], "journalId": "e", "sentDate": d(-5), "status": "pending"}], "journals": [
+        {"id": "a", "name": "Opens Soon Review", "opens": d(2), "closes": d(40), "notify": True},
+        {"id": "b", "name": "Quiet Quarterly", "opens": d(1), "closes": d(30), "notify": False},
+        {"id": "c", "name": "Closing Journal", "opens": d(-30), "closes": d(1), "notify": True},
+        {"id": "e", "name": "Already Sent Mag", "opens": d(-30), "closes": d(1), "notify": True}]}
+    with open(server.DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(doc, f)
+    check(wants_reminders(doc) and not wants_reminders({"journals": [{"notify": False}]}), "only runs when a journal has reminders on")
+
+    shown, real = [], notify.show
+
+    def record(title, body, clickable=True):
+        shown.append(title)
+        return real(title, body, clickable)
+
+    notify.show = record
+    if notify.is_windows():
+        check(notify.register_app(icon_path(), sys.executable) is None, "registered with Windows for notifications")
+        import winreg  # noqa: PLC0415
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\AppUserModelId\%s" % notify.APP_ID) as k:
+                check(winreg.QueryValueEx(k, "DisplayName")[0] == "Pen Pal", "notifications carry the name Pen Pal")
+                check(os.path.isfile(winreg.QueryValueEx(k, "IconUri")[0]), "and its icon")
+        except OSError as e:
+            check(False, "registration readable: %s" % e)
+    server.DESKTOP = True
+    server.QUIET_OK = True
+    httpd, url = start_server()
+    res = remind_once(webview, url)
+    httpd.shutdown()
+    lines.append("     " + json.dumps({"alerts": [a.get("key") for a in res["alerts"]], "error": res["error"], "delivered": res["delivered"]}))
+    check(not res["error"], "the rules ran in the hidden window")
+    check(sorted(a.get("key") for a in res["alerts"]) == ["a:opens:" + d(2), "c:closes:" + d(1)], "due: one opening, one closing (not a journal with reminders off, not one already sent to)")
+    check(res["delivered"]["shown"] == 2 and not res["delivered"]["errors"], "Windows accepted both notifications" if notify.is_windows() else "both notifications delivered")
+    check(sorted(shown) == ["Closing Journal closes tomorrow", "Opens Soon Review opens in 2 days"], "notification titles")
+    again = notify.deliver(res["alerts"], reminder_folder())
+    check(again["shown"] == 0, "each reminder is shown once")
+    notify.show = real
+
+    if notify.is_windows():
+        name = notify.TASK_NAME + " (build test)"
+        check(notify.add_task(sys.executable, name) is None, "daily task created")
+        cmd = notify.task_command(name)
+        check(cmd is not None and os.path.normcase(cmd) == os.path.normcase(sys.executable), "task runs this program (%s)" % cmd)
+        check(notify.remove_task(name) is None and notify.task_command(name) is None, "task removed")
+
+    try:
+        with open(os.path.join(tmp, "pen-pal-reminders-log.txt"), encoding="utf-8") as f:
+            log = f.read()
+    except OSError:
+        log = ""
+    bad = [ln for ln in log.splitlines() if " ERROR " in ln or "Traceback" in ln or "Error while processing" in ln]
+    check(not bad, "no errors in the log")
+    lines.append("ALL OK" if ok[0] else "FAILED")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n--- log ---\n" + log)
+    return 0 if ok[0] else 1
 
 
 SMOKE_JS = r"""
@@ -383,6 +579,8 @@ def main():
     ap.add_argument("--browser", action="store_true", help="open in the web browser instead of a window")
     ap.add_argument("--check", metavar="FILE", help="self-test and write the result to FILE")
     ap.add_argument("--smoke", metavar="FILE", help="open the real window, drive it, write the result to FILE")
+    ap.add_argument("--remind", action="store_true", help="show any reading-period reminders that are due, then exit")
+    ap.add_argument("--remind-check", metavar="FILE", help="self-test of reminders, write the result to FILE")
     ap.add_argument("--title-bar", choices=server.TITLE_BARS, default="custom", help="with --smoke: which title bar to test")
     args = ap.parse_args()
 
@@ -390,6 +588,10 @@ def main():
         sys.exit(run_check(args.check))
     if args.smoke:
         sys.exit(run_smoke(args.smoke, args.title_bar))
+    if args.remind_check:
+        exit_now(run_remind_check(args.remind_check))
+    if args.remind:
+        exit_now(run_remind())
 
     log_path = setup_logging(os.path.dirname(server.DATA_FILE))
     LOG.info("Pen Pal %s starting (%s, Python %s, frozen=%s)", server.APP_VERSION, sys.platform, sys.version.split()[0], server.frozen())
@@ -434,6 +636,12 @@ def main():
     frameless = server.load_settings()["titleBar"] == "custom"
     window, _api = open_window(webview, url, frameless)
     LOG.info("window created (%s title bar)", "custom" if frameless else "standard")
+    if notify.is_windows():
+        def register():
+            err = notify.register_app(icon_path(), sys.executable if server.frozen() else None)
+            if err:
+                LOG.warning("notification registration: %s", err)
+        threading.Thread(target=register, daemon=True).start()
     webview.start()
     LOG.info("window closed")
     httpd.shutdown()

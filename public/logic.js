@@ -107,6 +107,7 @@
       // More yearly windows beyond the main one, as month-day pairs ({ opens: '01-15', closes: '03-01' }).
       extraWindows: arr(j.extraWindows).map((w) => ({ opens: MMDD(w && w.opens), closes: MMDD(w && w.closes) })).filter((w) => w.opens && w.closes).slice(0, 6),
       alwaysOpen: j.alwaysOpen === true,
+      notify: j.notify === true, // remind me before the reading period opens and closes
       replyDays: (() => { const n = intOrNull(j.replyDays); return n && n > 0 && n < 2000 ? n : null; })(),
       pays: YN.includes(j.pays) ? j.pays : 'unknown',
       reprints: YN.includes(j.reprints) ? j.reprints : 'unknown',
@@ -208,6 +209,7 @@
       theme: THEMES.includes(s.theme) ? s.theme : 'system',
       followUpDays: inRange(s.followUpDays, 14, 365, 90),
       deskDays: inRange(s.deskDays, 7, 180, 60),
+      notifyDays: inRange(s.notifyDays, 0, 30, 3),
       checkUpdates: s.checkUpdates !== false,
     };
   }
@@ -615,6 +617,42 @@
     const rank = (x) => (x.kind === 'opens' ? 1 : 0);
     out.sort((a, b) => a.date.localeCompare(b.date) || rank(a) - rank(b));
     return out;
+  }
+
+  // ---------- reading-period reminders (Windows notifications) ----------
+  // For journals with reminders on: a reading period opening or closing within notifyDays.
+  // The closing reminder is skipped when you already sent something there during that period.
+  // Each has a key that stays the same for that journal, kind and date, so it is shown once.
+  const dayLabel = (d) => MONTH_NAMES[Number(d.slice(5, 7)) - 1] + ' ' + Number(d.slice(8, 10));
+  function windowAlerts(data, today) {
+    const days = normalizeSettings(data.settings).notifyDays;
+    const out = [];
+    const when = (n) => (n === 0 ? 'today' : n === 1 ? 'tomorrow' : 'in ' + n + ' days');
+    for (const j of data.journals) {
+      if (!j.notify || j.alwaysOpen) continue;
+      for (const w of windowsFrom(j, today, isRecurring(j) ? 4 : 1)) {
+        const period = w.opens && w.closes ? 'Reading period ' + dayLabel(w.opens) + ' to ' + dayLabel(w.closes) + '.' : '';
+        if (w.opens) {
+          const n = daysBetween(today, w.opens);
+          if (n >= 0 && n <= days) {
+            out.push({ key: j.id + ':opens:' + w.opens, journalId: j.id, name: j.name, kind: 'opens', date: w.opens, daysAway: n,
+              title: j.name + ' opens ' + when(n), body: period || 'Opens ' + dayLabel(w.opens) + '.' });
+          }
+        }
+        if (w.closes) {
+          const n = daysBetween(today, w.closes);
+          const from = w.opens || addDays(w.closes, -366);
+          const sent = data.submissions.some((s) => s.journalId === j.id && s.sentDate && s.sentDate >= from && s.sentDate <= w.closes);
+          if (n >= 0 && n <= days && !sent) {
+            out.push({ key: j.id + ':closes:' + w.closes, journalId: j.id, name: j.name, kind: 'closes', date: w.closes, daysAway: n,
+              title: j.name + ' closes ' + when(n), body: 'Last day: ' + dayLabel(w.closes) + '. You have not sent anything there this reading period.' });
+          }
+        }
+      }
+    }
+    out.sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name));
+    const seen = new Set();
+    return out.filter((a) => (seen.has(a.key) ? false : seen.add(a.key)));
   }
 
   function openNow(data, today) {
@@ -1419,7 +1457,7 @@
     guessSubMapping, guessImportKind, parseSubStatus, splitTitles, buildSubImport, applySubImport,
     entriesFor, isActiveEntry, manuscriptState, manuscriptSummary, manuscriptWarnings, checkEntry, entryAlerts, setEntryStatus, removeManuscript,
     poemOutcome, poemHistory, nextTargets,
-    checkSubmission, upcomingDeadlines, openNow, staleSubmissions, stats,
+    checkSubmission, upcomingDeadlines, windowAlerts, openNow, staleSubmissions, stats,
     journalStats, responseBuckets, spend,
     snapshot, restoreSnapshot, createHistory, historyRecord, historyUndo, historyRedo,
     backupReminder, markBackupDownloaded, snoozeBackupReminder,

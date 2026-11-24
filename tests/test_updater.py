@@ -242,6 +242,15 @@ class UpdateEndpointTests(unittest.TestCase):
         s, info = self.req("GET", "/api/info")
         self.assertEqual((info["titleBar"], info["frameless"], info["canInstall"]), ("custom", False, False))
 
+    def test_reminder_setting(self):
+        s, r = self.req("PUT", "/api/settings", json.dumps({"remindClosed": False}))
+        self.assertEqual((s, r["remindClosed"], r["titleBar"]), (200, False, server.load_settings()["titleBar"]))
+        s, _ = self.req("PUT", "/api/settings", json.dumps({"remindClosed": "no"}))
+        self.assertEqual(s, 400)
+        s, info = self.req("GET", "/api/info")
+        self.assertEqual((info["remindClosed"], info["canRemindClosed"]), (False, False))
+        self.req("PUT", "/api/settings", json.dumps({"remindClosed": True}))
+
 
 if __name__ == "__main__":
     unittest.main()

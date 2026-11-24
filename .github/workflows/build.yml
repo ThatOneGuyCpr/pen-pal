@@ -55,6 +55,15 @@ jobs:
             if ($p.ExitCode -ne 0) { exit 1 }
           }
 
+      - name: Reminders end to end (notifications and the daily task)
+        shell: pwsh
+        run: |
+          $out = "$pwd\remind-check.txt"
+          $p = Start-Process -FilePath dist\PenPal.exe -ArgumentList '--remind-check', $out -PassThru
+          if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; Write-Host "the reminder check hung"; exit 1 }
+          if (Test-Path $out) { Get-Content $out } else { Write-Host "no result file: the app crashed" }
+          if ($p.ExitCode -ne 0) { exit 1 }
+
       - uses: actions/upload-artifact@v4
         with:
           name: PenPal-exe

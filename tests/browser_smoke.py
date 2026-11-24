@@ -173,6 +173,44 @@ def main():
             tab("journals")
             check("From the directory" in page.locator("#view tbody tr", has_text="Copper Nickel").inner_text(), "My journals shows where it came from")
 
+            # ---- reading-period reminders: the bell on a journal
+            row = page.locator("#view tbody tr", has_text="Copper Nickel")
+            check(row.locator("button.bell[aria-pressed=false]").count() == 1, "journal has a reminder bell, off to start")
+            row.locator("button.bell").click()
+            saved()
+            check([j["notify"] for j in api()["journals"] if j["name"] == "Copper Nickel"] == [True], "ringing the bell turns reminders on")
+            check(page.locator("#view tbody tr", has_text="Copper Nickel").locator("button.bell.on[aria-pressed=true]").count() == 1, "bell shows it is on")
+            check(page.locator("#view tbody tr", has_text="Always Open Mag").locator("button.bell").count() == 0, "no bell for a journal open all year")
+            page.locator("#view tbody tr", has_text="Copper Nickel").locator('button:has-text("Edit")').click()
+            check(page.locator("#dlg [name=notify]").is_checked(), "journal form has the reminder option, matching the bell")
+            page.uncheck("#dlg [name=notify]")
+            submit()
+            saved()
+            check([j["notify"] for j in api()["journals"] if j["name"] == "Copper Nickel"] == [False], "and it can be turned off there")
+            tab("settings")
+            check("Reading period reminders" in view() and "None are on yet" in view(), "Settings has a reminders card")
+            check(page.locator("#remindClosed").count() == 0 and "PenPal.exe app" in view(), "in a browser, it explains notifications come from the app")
+            page.fill("#notifyDays", "7")
+            page.click('[data-act="save-notify-days"]')
+            saved()
+            check(api()["settings"]["notifyDays"] == 7, "how many days ahead is saved")
+            page.fill("#notifyDays", "3")
+            page.click('[data-act="save-notify-days"]')
+            saved()
+
+            # ---- Find journals: the panel on the right follows you down a long list
+            tab("find")
+            if page.locator('.toggle[data-key="pays"][aria-pressed=true]').count():
+                page.click('.toggle[data-key="pays"]')
+            page.locator(".result").nth(1).click()
+            n_res = page.locator(".result").count()
+            page.evaluate("document.querySelector('.mainwrap').scrollTop = 1600")
+            page.wait_for_timeout(150)
+            box = page.locator(".detail").bounding_box()
+            check(n_res > 12 and box and 0 <= box["y"] < 140, "detail panel stays in view after scrolling the list (%d results, panel at y=%s)" % (n_res, box and round(box["y"])))
+            page.evaluate("document.querySelector('.mainwrap').scrollTop = 0")
+            tab("journals")
+
             # ---- journal dialog: open all year, extra windows
             page.click("text=Add journal")
             page.fill("#dlg [name=name]", "Two Windows Review")
@@ -389,6 +427,9 @@ def main():
               const rec = (n) => (...a) => { window.__calls.push([n, ...a]); return Promise.resolve(); };
               window.pywebview = { api: {
                 win_minimize: rec('min'), win_close: rec('close'), open_data_folder: rec('open'), set_busy: rec('busy'),
+                notify: (alerts) => { window.__calls.push(['notify', alerts.map((a) => a.title)]); return Promise.resolve({ shown: alerts.length, errors: [] }); },
+                sync_reminders: (want) => { window.__calls.push(['sync', want]); return Promise.resolve({ supported: true, on: want, error: '' }); },
+                test_notification: () => { window.__calls.push(['test']); return Promise.resolve(''); },
                 win_bounds: () => Promise.resolve([100, 100, 1280, 900]),
                 win_set_bounds: rec('bounds'),
                 win_is_max: () => Promise.resolve(maxed),
@@ -400,7 +441,7 @@ def main():
             def fake_info(route):
                 r = route.fetch()
                 body = r.json()
-                body.update(desktop=True, frameless=True)
+                body.update(desktop=True, frameless=True, canRemindClosed=True)
                 route.fulfill(response=r, json=body)
 
             dpage.route("**/api/info", fake_info)
@@ -436,6 +477,30 @@ def main():
             check(any(c[0] == "save" and c[1].startswith("pen-pal-backup-") for c in dpage.evaluate("window.__calls")), "downloads go through the Windows Save dialog")
             dpage.click('#nav [data-tab="settings"]')
             check(dpage.locator('button:has-text("Open the data folder")').count() == 1, "open-folder button in the app")
+            # reminders through the desktop bridge
+            calls = dpage.evaluate("window.__calls")
+            check(["sync", False] in calls, "at start-up, no journal has reminders, so no daily check")
+            dpage.click('#nav [data-tab="journals"]')
+            dpage.click('button:has-text("Add journal")')
+            dpage.fill("#dlg [name=name]", "Soon Review")
+            dpage.fill("#dlg [name=opens]", d(2))
+            dpage.fill("#dlg [name=closes]", d(40))
+            dpage.check("#dlg [name=notify]")
+            dpage.click("#dlg button[type=submit][value=save]")
+            dpage.wait_for_function("window.__calls.some(c => c[0] === 'notify')")
+            calls = dpage.evaluate("window.__calls")
+            check(["notify", ["Soon Review opens in 2 days"]] in calls, "a journal opening in 2 days sends a Windows notification")
+            check(["sync", True] in calls, "and sets up the daily check while Pen Pal is closed")
+            dpage.click('#nav [data-tab="settings"]')
+            check(dpage.locator("#remindClosed").is_checked() and "every day at 9 AM" in dpage.inner_text("#remindCard"), "Settings shows the daily check is on")
+            dpage.click('[data-act="test-notification"]')
+            dpage.wait_for_function("window.__calls.some(c => c[0] === 'test')")
+            check(True, "test notification button reaches Windows")
+            dpage.uncheck("#remindClosed")
+            dpage.wait_for_function("document.querySelector('#remindCard') && !document.querySelector('#remindCard').innerText.includes('9 AM')")
+            check(urllib.request.urlopen(BASE + "api/settings").read().find(b'"remindClosed": false') >= 0, "turning it off is saved")
+            dpage.check("#remindClosed")
+            dpage.wait_for_timeout(300)
             dpage.check('input[name=theme][value=dark]')
             dpage.wait_for_function("window.__calls.filter(c => c[0] === 'busy').length >= 2")
             busy = [c[1] for c in dpage.evaluate("window.__calls") if c[0] == "busy"]

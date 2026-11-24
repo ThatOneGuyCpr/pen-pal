@@ -244,6 +244,7 @@
     calendar: '<rect x="3.5" y="5" width="17" height="15" rx="1.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
     import: '<path d="M12 3v11M7.5 9.5L12 14l4.5-4.5"/><path d="M4 15v4.5h16V15"/>',
     export: '<path d="M12 14V3M7.5 7.5L12 3l4.5 4.5"/><path d="M4 15v4.5h16V15"/>',
+    bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   };
   const icon = (k, size) => '<svg width="' + (size || 18) + '" height="' + (size || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON[k] + '</svg>';
@@ -518,7 +519,7 @@
         .map(([k, v]) => '<div class="fact"><b>' + k + '</b><span>' + (k === 'Right now' ? v : esc(v)) + '</span></div>').join('') + '</div>' +
       '<div class="yourhist"><b>Your history here:</b> ' + esc(hist) + '</div>' +
       '<div class="btnrow" style="margin-top:16px">' +
-      (r.mine ? '<button class="primary" data-act="new-sub" data-journal="' + esc(r.mine.id) + '">Send poems</button><button data-act="edit-journal" data-id="' + esc(r.mine.id) + '">Your notes on it</button>'
+      (r.mine ? '<button class="primary" data-act="new-sub" data-journal="' + esc(r.mine.id) + '">Send poems</button><button data-act="edit-journal" data-id="' + esc(r.mine.id) + '">Your notes on it</button>' + (r.mine.alwaysOpen ? '' : bellButton(r.mine, true))
         : '<button class="primary" data-act="find-add" data-id="' + esc(e.id) + '">Add to my journals</button>') +
       (safeUrl(e.url) ? '<a class="btn quiet" href="' + esc(e.url) + '" target="_blank" rel="noopener noreferrer">Guidelines</a>' : '') + '</div>' +
       '<p class="sub" style="margin:12px 0 0">Checked ' + (dir.checked ? fmtDate(dir.checked) : 'by hand') + '. Details change; read their guidelines before you send.</p></section>';
@@ -631,7 +632,7 @@
       '<label>Suggest a follow-up after this many days<input id="followUpDays" type="number" min="14" max="365" step="1" value="' + st.followUpDays + '"></label>' +
       '<p class="hint" style="margin-top:-6px">Used when Pen Pal does not know a journal\'s usual reply time from your history or your notes on it.</p>' +
       '<label>Show deadlines on the Desk for the next (days)<input id="deskDays" type="number" min="7" max="180" step="1" value="' + st.deskDays + '"></label>' +
-      '<button class="primary" data-act="save-reminders">Save</button></section>';
+      '<button class="primary" data-act="save-reminders">Save</button></section>' + remindCard();
     const right = updateCard() +
       '<section class="card"><h2>Your data</h2><p class="hint">Saved in <code>' + esc(info.dataFolder || 'the data folder') + '</code>, with a daily copy in its backups folder.</p>' +
       '<div class="btnrow">' + (canOpen ? '<button class="small" data-act="open-data-folder">Open the data folder</button>' : '') + '<button class="small" data-tab="export">Backups and second folder</button></div></section>' +
@@ -678,6 +679,48 @@
 
   // ----- the desktop window's own title bar
   const desktopApi = () => (window.pywebview && window.pywebview.api) || null;
+
+  // ----- reading-period reminders (Windows notifications; which ones is decided in logic.js)
+  let remindTask = null; // what the program said about the daily check while Pen Pal is closed
+  function bellButton(j, withLabel) {
+    const label = j.notify ? 'Reminders on for ' + j.name : 'Remind me about ' + j.name + '\'s reading period';
+    return '<button class="small bell' + (j.notify ? ' on' : '') + '" data-act="toggle-notify" data-id="' + esc(j.id) + '" aria-pressed="' + (j.notify ? 'true' : 'false') + '" title="' + esc(label) + '"' +
+      (withLabel ? '' : ' aria-label="' + esc(label) + '"') + '>' + icon('bell', 15) + (withLabel ? (j.notify ? 'Reminders on' : 'Remind me') : '') + '</button>';
+  }
+  async function checkReminders() {
+    const a = desktopApi();
+    if (!a || !a.notify || !data) return;
+    const due = L.windowAlerts(data, today());
+    if (!due.length) return;
+    try { await a.notify(due); } catch (e) { /* the Desk still lists them */ }
+  }
+  async function syncReminders() {
+    const a = desktopApi();
+    if (!a || !a.sync_reminders || !data) return;
+    try { remindTask = await a.sync_reminders(data.journals.some((j) => j.notify)); } catch (e) { remindTask = { supported: true, on: false, error: String(e) }; }
+    if (tab === 'settings') { const el = $('#remindCard'); if (el) el.outerHTML = remindCard(); }
+  }
+  function startReminders() {
+    const go = () => { checkReminders(); syncReminders(); setInterval(checkReminders, 30 * 60 * 1000); };
+    if (desktopApi() && desktopApi().notify) go(); else window.addEventListener('pywebviewready', go, { once: true });
+  }
+  function remindCard() {
+    const st = data.settings;
+    const a = desktopApi();
+    const any = data.journals.filter((j) => j.notify).length;
+    let status = '';
+    if (info.canRemindClosed && info.remindClosed && remindTask) {
+      status = remindTask.error ? 'Windows would not set up the daily check: ' + remindTask.error
+        : remindTask.on ? 'Windows checks every day at 9 AM and when you sign in.' : '';
+    }
+    return '<section class="card" id="remindCard"><h2>Reading period reminders</h2>' +
+      '<p class="hint" style="margin-top:0">Turn them on per journal with the bell in My journals. ' + (any ? any + ' journal' + (any === 1 ? ' has' : 's have') + ' them on.' : 'None are on yet.') + '</p>' +
+      '<label>Remind me this many days before<input id="notifyDays" type="number" min="0" max="30" step="1" value="' + st.notifyDays + '"></label>' +
+      (info.canRemindClosed
+        ? '<label class="check"><input id="remindClosed" type="checkbox"' + (info.remindClosed ? ' checked' : '') + '> Also remind me when Pen Pal is closed</label>' + (status ? '<p class="hint" style="margin-top:-4px">' + esc(status) + '</p>' : '')
+        : '<p class="hint">' + (info.desktop ? 'While Pen Pal is open, reminders show as Windows notifications. The installed PenPal.exe can also remind you while it is closed.' : 'Reminders show as Windows notifications in the PenPal.exe app.') + '</p>') +
+      '<div class="btnrow"><button class="primary" data-act="save-notify-days">Save</button>' + (a && a.test_notification ? '<button data-act="test-notification">Send a test notification</button>' : '') + '</div></section>';
+  }
   function setupTitleBar() {
     if (!info.frameless || document.body.classList.contains('framed')) return;
     document.body.classList.add('framed');
@@ -749,7 +792,7 @@
     let html = '<div class="toolbar"><h2 style="margin:0">My journals</h2><span class="grow"></span>' +
       '<button data-tab="find">' + icon('find', 16) + 'Find journals</button><button data-act="import-journals">Import from CSV</button><button class="primary" data-act="add-journal">Add journal</button>' +
       '<input id="importFile" type="file" accept=".csv,.tsv,.txt,text/csv" hidden></div>' +
-      '<p class="hint">Reading dates drive the Calendar and the deadline list. A journal marked as repeating yearly rolls its dates forward on its own.</p>';
+      '<p class="hint">Reading dates drive the Calendar and the deadline list. A journal marked as repeating yearly rolls its dates forward on its own. Ring the bell to get a Windows notification before a journal opens and closes.</p>';
     if (!rows.length) return html + '<div class="empty">No journals yet.</div>';
     html += '<table><thead><tr><th>Journal</th><th>Reading period</th><th>Fee</th><th>Limits</th><th>Sent</th><th></th></tr></thead><tbody>' +
       rows.map((j) => {
@@ -763,7 +806,7 @@
           (j.dirId ? '<br>From the directory' + (j.checked ? ', checked ' + fmtDate(j.checked) : '') : '') + '</div></td>' +
           '<td>' + (j.fee === null ? '' : j.fee === 0 ? 'Free' : money(j.fee)) + '</td>' +
           '<td class="sub">' + (j.maxPoems ? 'Up to ' + j.maxPoems + ' poems<br>' : '') + 'Simultaneous: ' + ({ yes: 'yes', no: 'no', unknown: 'not sure' }[j.simSubs]) + '</td>' +
-          '<td class="num">' + n + '</td><td class="nowrap"><div class="btnrow"><button class="small" data-act="new-sub" data-journal="' + esc(j.id) + '">Send poems</button>' +
+          '<td class="num">' + n + '</td><td class="nowrap"><div class="btnrow">' + (j.alwaysOpen ? '' : bellButton(j)) + '<button class="small" data-act="new-sub" data-journal="' + esc(j.id) + '">Send poems</button>' +
           '<button class="small" data-act="edit-journal" data-id="' + esc(j.id) + '">Edit</button></div></td></tr>';
       }).join('') + '</tbody></table>';
     return html;
@@ -946,6 +989,7 @@
       '<label>Reading period closes<input type="date" name="closes" value="' + esc(j.closes) + '"></label></div>' +
       '<label class="check"><input type="checkbox" name="alwaysOpen"' + (j.alwaysOpen ? ' checked' : '') + '> Open all year (no reading period)</label>' +
       '<label class="check"><input type="checkbox" name="repeat"' + (j.repeat === 'yearly' ? ' checked' : '') + '> Repeats every year. Enter this year\'s dates and Pen Pal moves them forward on its own.</label>' +
+      '<label class="check"><input type="checkbox" name="notify"' + (j.notify ? ' checked' : '') + '> Remind me before the reading period opens and closes</label>' +
       '<label id="extraField">Other yearly windows (optional)<input name="extra" placeholder="Jan 15 to Mar 1; Jul 1 to Jul 31" value="' + esc(L.windowsText(j.extraWindows)) + '"></label>' +
       '<div class="row2"><label>Fee in dollars (0 if free)<input type="number" name="fee" min="0" step="0.01" value="' + (j.fee === null ? '' : j.fee) + '"></label>' +
       '<label>Most poems per submission<input type="number" name="maxPoems" min="1" step="1" value="' + (j.maxPoems === null ? '' : j.maxPoems) + '"></label></div>' +
@@ -973,11 +1017,13 @@
         if (repeat === 'yearly' && ex.bad.length) return setErr(form, 'Could not read "' + ex.bad[0] + '". Write windows like: Jan 15 to Mar 1; Jul 1 to Jul 31');
         let url = String(fd.get('url')).trim();
         if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
-        const fields = { name, url, opens: alwaysOpen ? '' : opens, closes: alwaysOpen ? '' : closes, repeat, alwaysOpen, extraWindows: repeat === 'yearly' ? ex.windows : [],
+        const fields = { name, url, opens: alwaysOpen ? '' : opens, closes: alwaysOpen ? '' : closes, repeat, alwaysOpen, notify: !!fd.get('notify'), extraWindows: repeat === 'yearly' ? ex.windows : [],
           replyDays: fd.get('replyDays'), pays: fd.get('pays'), reprints: fd.get('reprints'), fee: fd.get('fee'), maxPoems: fd.get('maxPoems'), simSubs: fd.get('simSubs'), notes: String(fd.get('notes')) };
         if (id) Object.assign(j, L.normalizeJournal(Object.assign({}, j, fields)));
         else data.journals.push(L.normalizeJournal(Object.assign({ id: L.uid() }, fields)));
         commit('Saved a journal');
+        checkReminders();
+        syncReminders();
       },
       (form) => {
         $('[name=simSubs]', form).value = j.simSubs;
@@ -1606,6 +1652,29 @@
       redrawUpdates();
       try { await putJSON('/api/update/apply'); toast('Restarting on the new version…'); } catch (e) { upd.applying = false; upd.error = e.message; redrawUpdates(); }
     },
+    'toggle-notify': (d) => {
+      const j = L.journalById(data, d.id);
+      if (!j) return;
+      j.notify = !j.notify;
+      commit(j.notify ? 'Turned on reminders' : 'Turned off reminders');
+      const w = L.currentWindow(j, today());
+      const nd = data.settings.notifyDays;
+      toast(j.notify ? (w.opens || w.closes ? 'You will get a notification ' + (nd === 0 ? 'on the day ' : nd + ' day' + (nd === 1 ? '' : 's') + ' before ') + j.name + ' opens and closes.' : 'Reminders on. Add reading dates for ' + j.name + ' so Pen Pal knows when.') : 'Reminders off for ' + j.name + '.');
+      checkReminders();
+      syncReminders();
+    },
+    'save-notify-days': () => {
+      data.settings = L.normalizeSettings(Object.assign({}, data.settings, { notifyDays: $('#notifyDays').value }));
+      commitQuiet();
+      toast('Saved');
+      checkReminders();
+    },
+    'test-notification': async () => {
+      const a = desktopApi();
+      if (!a || !a.test_notification) return;
+      const err = await a.test_notification();
+      toast(err ? 'Windows did not show it: ' + err : 'Sent. If nothing appeared, check that notifications are on for Pen Pal in Windows Settings, System, Notifications.');
+    },
     'save-reminders': () => {
       data.settings = L.normalizeSettings(Object.assign({}, data.settings, { followUpDays: $('#followUpDays').value, deskDays: $('#deskDays').value }));
       commitQuiet();
@@ -1701,6 +1770,12 @@
         info.titleBar = b.titleBar;
         toast(info.desktop ? 'Saved. You will see it the next time you open Pen Pal.' : 'Saved for the Pen Pal app.');
       }, (err) => toast('Could not save: ' + err.message));
+    } else if (e.target.id === 'remindClosed') {
+      putJSON('/api/settings', { remindClosed: e.target.checked }).then((b) => {
+        info.remindClosed = b.remindClosed;
+        syncReminders();
+        toast(b.remindClosed ? 'Saved. Windows will check once a day.' : 'Saved. Reminders only while Pen Pal is open.');
+      }, (err) => toast('Could not save: ' + err.message));
     } else if (e.target.id === 'checkUpdates') {
       data.settings = L.normalizeSettings(Object.assign({}, data.settings, { checkUpdates: e.target.checked }));
       commitQuiet();
@@ -1759,6 +1834,7 @@
       setStatus('Saved on this PC');
       render();
       setupTitleBar();
+      startReminders();
       refreshServer();
       if (data.settings.checkUpdates) checkForUpdates(false, true);
     } catch (e) {

@@ -23,7 +23,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 APP_NAME = "Pen Pal"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 
 def frozen():
@@ -165,7 +165,7 @@ def settings_path():
 
 def load_settings():
     """Settings the program needs before the page loads (or outside the data file)."""
-    out = {"backupFolder": "", "titleBar": "custom"}
+    out = {"backupFolder": "", "titleBar": "custom", "remindClosed": True}
     try:
         with open(settings_path(), "r", encoding="utf-8") as f:
             obj = json.load(f)
@@ -176,6 +176,8 @@ def load_settings():
             out["backupFolder"] = obj["backupFolder"]
         if obj.get("titleBar") in TITLE_BARS:
             out["titleBar"] = obj["titleBar"]
+        if isinstance(obj.get("remindClosed"), bool):
+            out["remindClosed"] = obj["remindClosed"]
     return out
 
 
@@ -220,7 +222,7 @@ def mirror_copy():
 
 def settings_view():
     st = load_settings()
-    return {"backupFolder": st["backupFolder"], "titleBar": st["titleBar"], "mirror": dict(MIRROR)}
+    return {"backupFolder": st["backupFolder"], "titleBar": st["titleBar"], "remindClosed": st["remindClosed"], "mirror": dict(MIRROR)}
 
 
 # ---- updates (see updater.py) ----
@@ -326,7 +328,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_json(200, settings_view())
         if self.path.split("?")[0] == "/api/info":
             return self._send_json(200, {"app": APP_NAME, "version": APP_VERSION, "dataFolder": os.path.dirname(DATA_FILE), "desktop": DESKTOP,
-                                         "frameless": FRAMELESS, "titleBar": load_settings()["titleBar"], "canInstall": can_install()})
+                                         "frameless": FRAMELESS, "titleBar": load_settings()["titleBar"], "canInstall": can_install(),
+                                         "remindClosed": load_settings()["remindClosed"], "canRemindClosed": DESKTOP and frozen() and sys.platform.startswith("win")})
         if self.path.split("?")[0] == "/api/update":
             return self._send_json(200, update_check(force="force=1" in self.path))
         if self.path.split("?")[0] == "/api/update/status":
@@ -381,11 +384,13 @@ class Handler(SimpleHTTPRequestHandler):
         return self._send_json(200, {"rev": obj["rev"]})
 
     def _put_settings(self, obj):
-        """Changes only the keys sent: backupFolder and/or titleBar."""
+        """Changes only the keys sent: backupFolder, titleBar, remindClosed."""
         if not isinstance(obj, dict) or not isinstance(obj.get("backupFolder", ""), str):
             return self._send_json(400, {"error": "unexpected settings shape"})
         if "titleBar" in obj and obj["titleBar"] not in TITLE_BARS:
             return self._send_json(400, {"error": "unexpected title bar"})
+        if "remindClosed" in obj and not isinstance(obj["remindClosed"], bool):
+            return self._send_json(400, {"error": "unexpected reminder setting"})
         with LOCK:
             st = load_settings()
             if "backupFolder" in obj:
@@ -395,6 +400,8 @@ class Handler(SimpleHTTPRequestHandler):
                 st["backupFolder"] = folder
             if "titleBar" in obj:
                 st["titleBar"] = obj["titleBar"]
+            if "remindClosed" in obj:
+                st["remindClosed"] = obj["remindClosed"]
             try:
                 save_data(st, settings_path())
             except OSError as e:

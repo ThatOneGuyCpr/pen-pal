@@ -250,7 +250,7 @@ test('old data files load unchanged and gain the new empty parts', () => {
   assert.equal(d.journals[0].repeat, 'none');
   assert.deepEqual(d.manuscripts, []);
   assert.deepEqual(d.entries, []);
-  assert.deepEqual(d.settings, { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: {}, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, checkUpdates: true });
+  assert.deepEqual(d.settings, { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: {}, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, notifyDays: 3, checkUpdates: true });
   assert.deepEqual(d.poems[0].rights, { bought: '', issue: '', pubDate: '', exclusiveUntil: '', reprints: 'unknown', revert: '', credit: '' });
   assert.equal(d.journals[0].alwaysOpen, false);
   // normalizing twice changes nothing
@@ -780,7 +780,7 @@ test('a monthly budget applies from its month on, and later changes keep history
   L.setBudget(d, '2026-12', 40);
   assert.equal(L.budgetSummary(d, '2026-12').left, 40); // the planned $25 entry not counted
   assert.deepEqual(L.normalizeSettings({ monthlyBudget: { '2026-13': 5, abc: 3, '2027-02': '40', '2027-01': -5 }, budgetWarnPct: 500 }),
-    { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: { '2027-02': 40 }, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, checkUpdates: true });
+    { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: { '2027-02': 40 }, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, notifyDays: 3, checkUpdates: true });
 });
 
 test('a yearly budget from Pen Pal 2.1 becomes a monthly one', () => {
@@ -1041,4 +1041,39 @@ test('the follow-up setting changes the default wait', () => {
   const r = L.queryReminders(d, '2026-11-20').find((x) => x.sub.id === 's3');
   assert.equal(r.expected, 30);
   assert.equal(r.basis, 'default');
+});
+
+// ---------- reading-period reminders ----------
+test('reminders before a reading period opens and closes, only for journals with the bell on', () => {
+  const d = L.normalize({
+    journals: [
+      { id: 'a', name: 'Alpha', opens: '2026-11-26', closes: '2027-01-10', notify: true },
+      { id: 'b', name: 'Beta', opens: '2026-10-01', closes: '2026-11-25', notify: true },
+      { id: 'c', name: 'Gamma', opens: '2026-11-25', closes: '2026-12-01' }, // bell off
+      { id: 'e', name: 'Epsilon', opens: '2026-10-01', closes: '2026-11-27', notify: true }, // already sent this period
+      { id: 'f', name: 'Far', opens: '2026-12-20', closes: '2027-01-20', notify: true }, // too far ahead
+      { id: 'g', name: 'Always', alwaysOpen: true, notify: true },
+      { id: 'y', name: 'Yearly', opens: '2024-11-27', closes: '2025-01-31', repeat: 'yearly', notify: true }, // rolls to 2026-11-27
+    ],
+    submissions: [{ id: 's1', journalId: 'e', sentDate: '2026-10-15', poemIds: [] }, { id: 's2', journalId: 'b', sentDate: '2025-10-15', poemIds: [] }],
+  });
+  const a = L.windowAlerts(d, '2026-11-24');
+  assert.deepEqual(a.map((x) => x.key), ['b:closes:2026-11-25', 'a:opens:2026-11-26', 'y:opens:2026-11-27']);
+  assert.equal(a[0].title, 'Beta closes tomorrow'); // a submission from last year does not count
+  assert.equal(a[0].body, 'Last day: Nov 25. You have not sent anything there this reading period.');
+  assert.equal(a[1].title, 'Alpha opens in 2 days');
+  assert.equal(a[1].body, 'Reading period Nov 26 to Jan 10.');
+  assert.equal(a[2].title, 'Yearly opens in 3 days');
+  assert.equal(L.windowAlerts(d, '2026-11-26').find((x) => x.journalId === 'a').title, 'Alpha opens today');
+});
+
+test('how far ahead reminders come is a setting, and the bell is kept on the journal', () => {
+  const d = L.normalize({ journals: [{ id: 'f', name: 'Far', opens: '2026-12-04', closes: '2027-01-20', notify: true }], settings: { notifyDays: 10 } });
+  assert.equal(L.windowAlerts(d, '2026-11-24').length, 1);
+  d.settings.notifyDays = 0;
+  assert.equal(L.windowAlerts(d, '2026-11-24').length, 0);
+  assert.equal(L.windowAlerts(d, '2026-12-04')[0].title, 'Far opens today');
+  assert.equal(L.normalizeSettings({ notifyDays: 99 }).notifyDays, 3);
+  assert.equal(L.normalizeJournal({ name: 'X', notify: 'yes' }).notify, false);
+  assert.equal(L.normalizeJournal({ name: 'X', notify: true }).notify, true);
 });

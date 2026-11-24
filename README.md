@@ -7,6 +7,7 @@ A private poetry submission tracker that runs on your own Windows PC, in its own
 - **Submissions:** which poems went where, when, and what happened.
 - **Manuscripts:** a chapbook or book, the poems in it, and every press or contest you enter it in.
 - **Rights:** what a journal took, when the poem is free to go out again, and the credit line to use.
+- **Reminders:** ring the bell on a journal for a Windows notification a few days before its reading period opens and before it closes, even when Pen Pal is closed.
 - **Fees:** a monthly budget, with a warning before a fee goes over it. Change the amount any time; earlier months keep what they had.
 
 The **Desk** shows what needs you: poems to withdraw because they were taken elsewhere, journals to follow up with, poems coming out of their exclusive period, deadlines in the next 60 days, and a backup reminder.
@@ -96,6 +97,7 @@ Pen Pal needs to be able to write to the folder `PenPal.exe` sits in (your Deskt
 - **SmartScreen blocks it:** More info, then Run anyway. The app is unsigned.
 - **The window is blank:** Windows 10 machines without the Edge WebView2 runtime need it from Microsoft (search "WebView2 Runtime"). Or run `PenPal.exe --browser` to use your browser.
 - **Pen Pal crashed or froze:** open the data folder (Settings, Your data) and look at `pen-pal-log.txt` (this run) and `pen-pal-log.prev.txt` (the run before). They hold start-up details and errors, never poem text. Send them along with a description of what happened.
+- **Reminders don't show up:** Settings, Reading period reminders, Send a test notification. If nothing appears, open Windows Settings, System, Notifications, and make sure Pen Pal is allowed (and Do not disturb is off). The daily check while Pen Pal is closed is a Task Scheduler task called "Pen Pal reminders"; it is removed when you turn the option off or ring off every bell. If you delete Pen Pal, turn reminders off first, or delete that task in Task Scheduler.
 - **The update says it can't install:** move `PenPal.exe` somewhere you can write to (Desktop, Documents), or download the new version from the releases page.
 - **You want Windows' snapping back:** Settings, Title bar, Standard Windows title bar, then reopen Pen Pal.
 - **The second folder says the last copy failed:** the drive may be unplugged or the folder renamed. Your data is still saved.
