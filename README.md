@@ -71,7 +71,7 @@ You match each column to a field and see every row before anything is added. Dat
 
 - With Python 3.8+ and `pip install pywebview`: `python penpal.py` opens the app window. Without pywebview it opens in your browser. `start.bat` does this for you, or runs `PenPal.exe` if it's in the folder.
 - `python server.py` is the plain-library server on its own (browser only).
-- `build-exe.bat` builds `PenPal.exe` locally. Normally GitHub builds it: every push runs the tests, builds the exe and self-checks it, and a version tag (`v2.0.0`) publishes a release.
+- `build-exe.bat` builds `PenPal.exe` locally. Normally GitHub builds it: every push runs the tests, builds the exe and self-checks it on Windows. When `APP_VERSION` in server.py changes, that push also publishes a release (v2.0.0, v2.1.0, ...).
 - Tests: `node --test tests/logic.test.js`, `python -m unittest tests/test_server.py`, and the optional browser test `python tests/browser_smoke.py` (needs Playwright and Chrome).
 
 ## Troubleshooting

@@ -19,7 +19,7 @@ Hard requirements he set:
 - `public/style.css`: palette from the approved mockup (ink #16202B, airmail red #B8322A, blue #234E8C), light and dark. Fonts bundled in `public/fonts` (Young Serif, Public Sans, IBM Plex Mono; OFL, licenses in fonts/LICENSE.txt). No CDNs.
 - `public/directory.json`: the starter journal directory (see below).
 - `assets/penpal.ico`: app icon. `start.bat` (runs PenPal.exe if present, else `penpal.py`), `build-exe.bat` (local build). Both CRLF and ASCII.
-- `.github/workflows/build.yml`: on push, tests + build + `--check` on windows-latest, uploads the exe as an artifact; on a `v*` tag, publishes a GitHub release with PenPal.exe and RELEASE_NOTES.md.
+- `.github/workflows/build.yml`: on push, tests + build + `--check` on windows-latest, uploads the exe as an artifact; when `APP_VERSION` in server.py has no release yet, publishes one (tag v{version}) with PenPal.exe and RELEASE_NOTES.md. Tag pushes from Claude sessions are refused, which is why releases key off the version instead. To ship an update: bump APP_VERSION, rewrite RELEASE_NOTES.md, push to main.
 
 ## Data model (normalize functions in logic.js)
 - Document: `{ rev, poems[], journals[], submissions[], manuscripts[], entries[], settings }`. Older files load fine; new fields default.
