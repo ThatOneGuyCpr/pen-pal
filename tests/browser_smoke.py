@@ -201,7 +201,11 @@ def main():
             page.fill("#budgetAmount", "10")
             page.click("text=Save budget")
             saved()
-            check("$7 left" in view(), "budget shows what is left ($3 spent of $10)")
+            check("$10 left" in view(), "budget shows what is left (last month's $3 fee does not count)")
+            check("Applies from" in view() and "Monthly budget" in view(), "budget is monthly")
+            tab("desk")
+            check("Set a monthly budget" not in view() and "$10 left" in view(), "Desk shows this month's budget")
+            tab("budget")
             tab("subs")
             page.click("text=Log a submission")
             page.select_option("#dlg [name=journalId]", label="Alpha Review")
@@ -212,7 +216,7 @@ def main():
             submit()
             saved()
             tab("budget")
-            check("$13 over budget" in view(), "budget page shows the overspend")
+            check("$10 over budget" in view(), "budget page shows the overspend")
             page.screenshot(path=os.path.join(work, "budget.png"), full_page=True)
 
             # ---- accept, rights, reprint reminder, calendar
@@ -279,14 +283,20 @@ def main():
             saved()
             page.click("text=Add entry")
             page.fill("#dlg [name=name]", "Fernhouse Chapbook Prize")
-            page.fill("#dlg [name=deadline]", d(15) if d(15)[:4] == str(TODAY.year) else d(0))
+            due = d(15) if d(15)[:4] == str(TODAY.year) else d(0)
+            page.fill("#dlg [name=deadline]", due)
             page.fill("#dlg [name=fee]", "25")
             page.dispatch_event("#dlg [name=fee]", "change")
             check("fee budget" in page.inner_text("#warns"), "entry fee warns about the budget too")
             submit()
             saved()
             tab("budget")
-            check("Planned entries: $25" in view(), "planned entry shows in the budget")
+            if due[:7] != d(0)[:7]:
+                check("Planned entries" not in view(), "next month's planned entry is not in this month")
+                page.click('#view .mcol[data-month="%s"]' % due[:7])
+            check("Planned entries: $25" in view(), "planned entry shows in its month")
+            check(page.locator("#view .mcol .cap").count() >= 1, "chart marks the monthly budget")
+            page.click("text=This month") if due[:7] != d(0)[:7] else None
 
             # ---- backups and the second folder
             tab("export")

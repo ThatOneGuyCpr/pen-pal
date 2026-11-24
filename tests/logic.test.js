@@ -250,7 +250,7 @@ test('old data files load unchanged and gain the new empty parts', () => {
   assert.equal(d.journals[0].repeat, 'none');
   assert.deepEqual(d.manuscripts, []);
   assert.deepEqual(d.entries, []);
-  assert.deepEqual(d.settings, { lastBackupDownload: '', backupSnoozedUntil: '', budgets: {}, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, checkUpdates: true });
+  assert.deepEqual(d.settings, { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: {}, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, checkUpdates: true });
   assert.deepEqual(d.poems[0].rights, { bought: '', issue: '', pubDate: '', exclusiveUntil: '', reprints: 'unknown', revert: '', credit: '' });
   assert.equal(d.journals[0].alwaysOpen, false);
   // normalizing twice changes nothing
@@ -739,48 +739,77 @@ function budgetFixture() {
   return d;
 }
 
-test('fees for a year, by month, with planned entries', () => {
+test('fees for a month and a year, with planned entries', () => {
   const d = budgetFixture();
-  const s = L.budgetSummary(d, 2026);
+  const s = L.budgetSummary(d, '2026-10');
   assert.equal(s.budget, null);
-  assert.equal(s.spent, 28);
-  assert.equal(s.planned, 25);
-  assert.equal(s.months[9].spent, 8);
-  assert.equal(s.months[10].spent, 20);
-  assert.equal(s.months[11].planned, 25);
-  assert.deepEqual(s.items.map((i) => i.name), ['Contest C', 'Press A', 'Beta Quarterly', 'Alpha Review']);
-  assert.equal(L.budgetSummary(d, 2025).spent, 50);
+  assert.equal(s.spent, 8);
+  assert.deepEqual(s.items.map((i) => i.name), ['Beta Quarterly', 'Alpha Review']);
+  assert.equal(L.budgetSummary(d, '2026-12').planned, 25);
+  assert.equal(L.budgetSummary(d, '2025-12').spent, 50);
+  const y = L.budgetYear(d, 2026);
+  assert.equal(y.spent, 28);
+  assert.equal(y.planned, 25);
+  assert.equal(y.months[9].spent, 8);
+  assert.equal(y.months[10].spent, 20);
+  assert.equal(y.months[11].planned, 25);
+  assert.equal(y.months[0].budget, null);
 });
 
-test('budget settings and what is left', () => {
+test('a monthly budget applies from its month on, and later changes keep history', () => {
   const d = budgetFixture();
-  L.setBudget(d, 2026, '100');
-  const s = L.budgetSummary(d, 2026);
-  assert.equal(s.budget, 100);
-  assert.equal(s.counted, 53);
-  assert.equal(s.left, 47);
-  assert.equal(s.warnAt, 80);
+  L.setBudget(d, '2026-11', '30');
+  assert.equal(L.budgetFor(d.settings, '2026-10'), null); // earlier months untouched
+  assert.equal(L.budgetFor(d.settings, '2026-11'), 30);
+  assert.equal(L.budgetFor(d.settings, '2027-06'), 30); // carries forward
+  const s = L.budgetSummary(d, '2026-11');
+  assert.equal(s.counted, 20);
+  assert.equal(s.left, 10);
+  assert.equal(s.warnAt, 24);
+  L.setBudget(d, '2027-01', 50); // a raise in January leaves November and December alone
+  assert.equal(L.budgetFor(d.settings, '2026-12'), 30);
+  assert.equal(L.budgetFor(d.settings, '2027-02'), 50);
+  assert.deepEqual(L.budgetYear(d, 2027).months.map((m) => m.budget).slice(0, 2), [50, 50]);
+  L.setBudget(d, '2026-12', ''); // remove from December on: January's change still stands
+  assert.equal(L.budgetFor(d.settings, '2026-11'), 30);
+  assert.equal(L.budgetFor(d.settings, '2026-12'), null);
+  assert.equal(L.budgetFor(d.settings, '2027-03'), 50);
+  L.setBudget(d, '2027-01', 30); // tidy: no entry that repeats the month before
+  assert.deepEqual(L.normalizeSettings(d.settings).monthlyBudget, { '2026-11': 30, '2026-12': null, '2027-01': 30 });
   d.settings = L.normalizeSettings(Object.assign({}, d.settings, { countPlanned: false }));
-  assert.equal(L.budgetSummary(d, 2026).left, 72);
-  L.setBudget(d, 2026, '');
-  assert.equal(L.budgetSummary(d, 2026).budget, null);
-  assert.deepEqual(L.normalizeSettings({ budgets: { 2026: -5, abc: 3, 2027: '40' }, budgetWarnPct: 500 }), { lastBackupDownload: '', backupSnoozedUntil: '', budgets: { 2027: 40 }, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, checkUpdates: true });
+  L.setBudget(d, '2026-12', 40);
+  assert.equal(L.budgetSummary(d, '2026-12').left, 40); // the planned $25 entry not counted
+  assert.deepEqual(L.normalizeSettings({ monthlyBudget: { '2026-13': 5, abc: 3, '2027-02': '40', '2027-01': -5 }, budgetWarnPct: 500 }),
+    { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: { '2027-02': 40 }, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, checkUpdates: true });
+});
+
+test('a yearly budget from Pen Pal 2.1 becomes a monthly one', () => {
+  assert.deepEqual(L.normalizeSettings({ budgets: { 2026: 120, 2027: 100 } }).monthlyBudget, { '2026-01': 10, '2027-01': 8.33 });
+  const d = budgetFixture();
+  d.settings = { budgets: { 2026: 240 } };
+  assert.equal(L.budgetSummary(d, '2026-11').budget, 20);
+  const n = L.normalize(Object.assign({}, d, { settings: { budgets: { 2026: 240 } } }));
+  assert.equal(n.settings.budgets, undefined);
+  assert.deepEqual(n.settings.monthlyBudget, { '2026-01': 20 });
 });
 
 test('budget warnings in the pre-send checks', () => {
   const d = budgetFixture();
   assert.equal(L.budgetCheck(d, 30, '2026-11-20'), null); // no budget set
-  L.setBudget(d, 2026, 100);
-  assert.equal(L.budgetCheck(d, 3, '2026-11-20'), null); // 53 + 3 = 56, under the $80 heads-up line
-  assert.equal(L.budgetCheck(d, 30, '2026-11-20'), 'This fee would bring you to $83 of your $100 fee budget for 2026.');
-  assert.equal(L.budgetCheck(d, 50, '2026-11-20'), 'This fee would take you to $103, over your $100 fee budget for 2026.');
-  assert.equal(L.budgetCheck(d, 50, '2027-01-02'), null); // a different year
+  L.setBudget(d, '2026-11', 50);
+  assert.equal(L.budgetCheck(d, 3, '2026-11-20'), null); // 20 + 3 = 23, under the $40 heads-up line
+  assert.equal(L.budgetCheck(d, 25, '2026-11-20'), 'This fee would bring you to $45 of your $50 fee budget for November 2026.');
+  assert.equal(L.budgetCheck(d, 35, '2026-11-20'), 'This fee would take you to $55, over your $50 fee budget for November 2026.');
+  assert.equal(L.budgetCheck(d, 35, '2026-10-02'), null); // before the budget started
+  // December carries the $50 budget and already has the $25 planned entry
+  assert.equal(L.budgetCheck(d, 20, '2026-12-01'), 'This fee would bring you to $45 of your $50 fee budget for December 2026.');
   // editing a submission does not count its own old fee twice
-  assert.equal(L.budgetCheck(d, 30, '2026-11-20', { subId: 's1' }), 'This fee would bring you to $80 of your $100 fee budget for 2026.');
+  d.submissions[0].sentDate = '2026-11-02';
+  assert.equal(L.budgetCheck(d, 20, '2026-11-20', { subId: 's1' }), 'This fee would bring you to $40 of your $50 fee budget for November 2026.');
   const w = L.checkSubmission(d, { poemIds: ['p3'], journalId: 'j1', sentDate: '2026-11-20', feePaid: '50' }, '2026-11-20');
-  assert.ok(w.some((m) => /over your \$100 fee budget/.test(m)));
-  const we = L.checkEntry(d, { manuscriptId: 'm1', name: 'New Prize', deadline: '2026-12-20', fee: '30' }, '2026-11-20');
-  assert.ok(we.some((m) => /\$83 of your \$100/.test(m)));
+  assert.ok(w.some((m) => /over your \$50 fee budget/.test(m)));
+  const we = L.checkEntry(d, { manuscriptId: 'm1', name: 'New Prize', deadline: '2026-12-20', fee: '20' }, '2026-11-20');
+  assert.ok(we.some((m) => /\$45 of your \$50/.test(m)));
 });
 
 // ---------- follow-up reminders ----------

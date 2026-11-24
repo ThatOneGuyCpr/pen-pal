@@ -23,7 +23,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 APP_NAME = "Pen Pal"
-APP_VERSION = "2.1.1"
+APP_VERSION = "2.2.0"
 
 
 def frozen():

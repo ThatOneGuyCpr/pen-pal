@@ -7,7 +7,7 @@ A private poetry submission tracker that runs on your own Windows PC, in its own
 - **Submissions:** which poems went where, when, and what happened.
 - **Manuscripts:** a chapbook or book, the poems in it, and every press or contest you enter it in.
 - **Rights:** what a journal took, when the poem is free to go out again, and the credit line to use.
-- **Fees:** a yearly budget, with a warning before a fee goes over it.
+- **Fees:** a monthly budget, with a warning before a fee goes over it. Change the amount any time; earlier months keep what they had.
 
 The **Desk** shows what needs you: poems to withdraw because they were taken elsewhere, journals to follow up with, poems coming out of their exclusive period, deadlines in the next 60 days, and a backup reminder.
 

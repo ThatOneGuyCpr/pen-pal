@@ -307,7 +307,14 @@ textarea.mono { font: 0.95rem/1.5 var(--serif); min-height: 140px; }
 /* ---------- budget ---------- */
 .budget { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .mchart { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 8px; border-bottom: 1px solid var(--line2); padding: 0 4px; height: 196px; align-items: end; }
-.mcol { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; height: 100%; min-width: 0; }
+.mcol { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; height: 100%; min-width: 0; position: relative; padding: 0; border: 0; background: none; border-radius: 6px 6px 0 0; cursor: pointer; font: inherit; color: inherit; }
+.mcol:hover { background: color-mix(in srgb, var(--blue-soft) 55%, transparent); }
+.mcol.on { background: var(--blue-soft); }
+.mcol:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.mcol .cap { position: absolute; left: 12%; right: 12%; height: 0; border-top: 2px dashed var(--ink2); pointer-events: none; }
+.mcol.over .v { color: var(--red, #b3261e); }
+.mlabels .on { color: var(--ink); font-weight: 600; }
+.legend i.capkey { height: 0; border-top: 2px dashed var(--ink2); border-radius: 0; vertical-align: 3px; }
 .mcol .v { font: 500 11.5px var(--mono); color: var(--ink2); }
 .mcol .bar { width: min(26px, 70%); display: flex; flex-direction: column; justify-content: flex-end; }
 .mcol .bar .p { background: repeating-linear-gradient(135deg, var(--blue-mid) 0 4px, var(--blue-soft) 4px 7px); border-radius: 4px 4px 0 0; }

@@ -16,7 +16,7 @@
   const ui = {
     subFilter: 'pending', poemFilter: 'all', poemQuery: '',
     findQuery: '', findSel: '', find: { openSoon: true, sim: false, free: false, pays: false, reprints: false, notSent: false },
-    budgetYear: Number(L.todayLocal().slice(0, 4)),
+    budgetMonth: L.todayLocal().slice(0, 7),
   };
 
   const $ = (s, r) => (r || document).querySelector(s);
@@ -391,8 +391,9 @@
 
     // right column: budget and what is out
     const year = Number(t.slice(0, 4));
-    const b = L.budgetSummary(data, year);
-    let right = '<section class="card"><div class="cardhead"><h2>Fee budget</h2><span class="sub">' + year + '</span></div>';
+    const ym = t.slice(0, 7);
+    const b = L.budgetSummary(data, ym);
+    let right = '<section class="card"><div class="cardhead"><h2>Fee budget</h2><span class="sub">' + esc(L.monthName(ym).split(' ')[0]) + '</span></div>';
     if (b.budget !== null) {
       const pct = (n) => Math.min(100, (n / Math.max(b.budget, 0.01)) * 100).toFixed(1) + '%';
       right += '<div style="display:flex;align-items:baseline;gap:8px"><span class="big">' + (money(b.spent) || '$0') + '</span><span class="sub">of ' + money(b.budget) + '</span></div>' +
@@ -400,7 +401,7 @@
         '<span class="spent" style="width:' + pct(b.spent) + '"></span>' + (b.countPlanned && b.planned ? '<span class="planned" style="left:' + pct(b.spent) + ';width:' + pct(b.planned) + '"></span>' : '') + '</div>' +
         '<p style="margin:0;font-size:13.5px">' + (b.left >= 0 ? money(b.left) + ' left' : money(-b.left) + ' over') + (b.planned && b.countPlanned ? ', counting ' + money(b.planned) + ' in planned entries.' : '.') + '</p>';
     } else {
-      right += '<p style="margin:0 0 10px">' + (money(b.spent) || '$0') + ' spent on fees so far this year.</p><button class="small" data-tab="budget">Set a yearly budget</button>';
+      right += '<p style="margin:0 0 10px">' + (money(b.spent) || '$0') + ' spent on fees so far this month.</p><button class="small" data-tab="budget">Set a monthly budget</button>';
     }
     right += '</section>';
     const out = data.poems.map((p) => ({ p, subs: L.pendingSubsFor(data, p.id) })).filter((x) => x.subs.length);
@@ -526,14 +527,16 @@
   // ----- Fee budget
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   function viewBudget() {
-    const y = ui.budgetYear;
-    const b = L.budgetSummary(data, y);
-    const max = Math.max(1, ...b.months.map((m) => m.spent + m.planned));
+    const ym = ui.budgetMonth;
+    const name = L.monthName(ym);
+    const thisMonth = L.todayLocal().slice(0, 7);
+    const b = L.budgetSummary(data, ym);
+    const yr = L.budgetYear(data, ym.slice(0, 4));
     const pct = (n) => (b.budget ? Math.min(100, (n / Math.max(b.budget, 0.01)) * 100) : 0).toFixed(1) + '%';
-    let html = pageHead(String(y), 'Fee budget',
-      '<button data-act="budget-year" data-delta="-1">' + (y - 1) + '</button><button data-act="budget-year" data-delta="1">' + (y + 1) + '</button>');
+    const nav = (delta) => { const m = L.addMonths(ym, delta); return '<button data-act="budget-month" data-month="' + m + '">' + esc(L.monthName(m).replace(/ \d{4}$/, m.slice(0, 4) === ym.slice(0, 4) ? '' : ' ' + m.slice(0, 4))) + '</button>'; };
+    let html = pageHead(name, 'Fee budget', nav(-1) + (ym !== thisMonth ? '<button data-act="budget-month" data-month="' + thisMonth + '">This month</button>' : '') + nav(1));
     let left = '<section class="card"><div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 28px;margin-bottom:6px">' +
-      '<div><div class="sub">Spent in ' + y + '</div><div class="big" style="font-size:2.8rem">' + (money(b.spent) || '$0') + '</div></div>';
+      '<div><div class="sub">Spent in ' + esc(name) + '</div><div class="big" style="font-size:2.8rem">' + (money(b.spent) || '$0') + '</div></div>';
     if (b.budget !== null) {
       left += '<div style="flex:1;min-width:220px"><div style="display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted)"><span>$0</span><span>Heads-up at ' + money(b.warnAt) + '</span><span>' + money(b.budget) + '</span></div>' +
         '<div class="meter" role="img" aria-label="' + esc((money(b.spent) || '$0') + ' spent, ' + (money(b.planned) || '$0') + ' planned, of a ' + money(b.budget) + ' budget') + '">' +
@@ -541,26 +544,32 @@
         '<span class="mark" style="left:' + b.warnPct + '%"></span></div>' +
         '<div style="font-size:13.5px">' + (b.left >= 0 ? money(b.left) + ' left' : money(-b.left) + ' over budget') + (b.planned ? '. Planned entries: ' + money(b.planned) + (b.countPlanned ? ', counted.' : ', not counted.') : '.') + '</div></div>';
     } else {
-      left += '<p class="hint" style="flex:1">No budget set for ' + y + '. Set one on the right and Pen Pal will warn you before a fee goes over.</p>';
+      left += '<p class="hint" style="flex:1">No budget for ' + esc(name) + '. Set one on the right and Pen Pal will warn you before a fee goes over.</p>';
     }
-    left += '</div><h3 style="margin-top:18px">By month</h3>' +
-      '<div class="mchart" role="img" aria-label="' + esc('Fees by month in ' + y + ': ' + b.months.map((m, i) => MONTHS[i] + ' ' + (money(m.spent) || '$0') + (m.planned ? ' plus ' + money(m.planned) + ' planned' : '')).join(', ')) + '">' +
-      b.months.map((m, i) => {
+    // The year at a glance: each month's fees, with that month's budget as a line.
+    const max = Math.max(1, ...yr.months.map((m) => Math.max(m.spent + m.planned, m.budget || 0)));
+    left += '</div><div class="cardhead" style="margin-top:18px"><h3 style="margin:0">' + yr.year + ' by month</h3><span class="sub">' + (money(yr.spent) || '$0') + ' paid' + (yr.planned ? ', ' + money(yr.planned) + ' planned' : '') + ' this year</span></div>' +
+      '<div class="mchart" role="img" aria-label="' + esc('Fees by month in ' + yr.year + ': ' + yr.months.map((m, i) => MONTHS[i] + ' ' + (money(m.spent) || '$0') + (m.planned ? ' plus ' + money(m.planned) + ' planned' : '') + (m.budget !== null ? ' of ' + money(m.budget) : '')).join(', ')) + '">' +
+      yr.months.map((m, i) => {
         const tot = m.spent + m.planned;
-        return '<div class="mcol" title="' + esc(MONTHS[i] + ': ' + (money(m.spent) || '$0') + ' paid' + (m.planned ? ', ' + money(m.planned) + ' planned' : '')) + '">' +
+        const over = m.budget !== null && tot > m.budget;
+        return '<button type="button" class="mcol' + (m.month === ym ? ' on' : '') + (over ? ' over' : '') + '" data-act="budget-month" data-month="' + m.month + '" title="' + esc(MONTHS[i] + ': ' + (money(m.spent) || '$0') + ' paid' + (m.planned ? ', ' + money(m.planned) + ' planned' : '') + (m.budget !== null ? ', budget ' + money(m.budget) : '')) + '">' +
           (tot ? '<span class="v">' + money(tot) + '</span>' : '') +
-          '<div class="bar" style="height:' + ((tot / max) * 150).toFixed(0) + 'px">' + (m.planned ? '<div class="p" style="flex:' + m.planned + '"></div>' : '') + (m.spent ? '<div class="s" style="flex:' + m.spent + '"></div>' : '') + '</div></div>';
-      }).join('') + '</div><div class="mlabels" aria-hidden="true">' + MONTHS.map((m) => '<span>' + m + '</span>').join('') + '</div>' +
-      '<div class="legend"><span><i style="background:var(--blue)"></i>Paid</span><span><i style="background:repeating-linear-gradient(135deg,var(--blue-mid) 0 3px,var(--blue-soft) 3px 5px)"></i>Planned entry</span></div></section>';
-    let right = '<section class="card"><h2>Budget for ' + y + '</h2>' +
-      '<label>Yearly budget for fees ($)<input id="budgetAmount" type="number" min="0" step="1" inputmode="decimal" value="' + (b.budget === null ? '' : b.budget) + '"></label>' +
+          '<div class="bar" style="height:' + ((tot / max) * 150).toFixed(0) + 'px">' + (m.planned ? '<div class="p" style="flex:' + m.planned + '"></div>' : '') + (m.spent ? '<div class="s" style="flex:' + m.spent + '"></div>' : '') + '</div>' +
+          (m.budget !== null ? '<i class="cap" style="bottom:' + ((m.budget / max) * 150).toFixed(0) + 'px"></i>' : '') + '</button>';
+      }).join('') + '</div><div class="mlabels" aria-hidden="true">' + MONTHS.map((m, i) => '<span' + (yr.months[i].month === ym ? ' class="on"' : '') + '>' + m + '</span>').join('') + '</div>' +
+      '<div class="legend"><span><i style="background:var(--blue)"></i>Paid</span><span><i style="background:repeating-linear-gradient(135deg,var(--blue-mid) 0 3px,var(--blue-soft) 3px 5px)"></i>Planned entry</span><span><i class="capkey"></i>Monthly budget</span></div></section>';
+    const later = Object.keys(L.normalizeSettings(data.settings).monthlyBudget).filter((k) => k > ym).sort()[0];
+    let right = '<section class="card"><h2>Monthly budget</h2>' +
+      '<label>Budget for fees each month ($)<input id="budgetAmount" type="number" min="0" step="1" inputmode="decimal" value="' + (b.budget === null ? '' : b.budget) + '"></label>' +
+      '<p class="hint" style="margin:-4px 0 10px">Applies from ' + esc(name) + ' on' + (later ? ', until the change you made for ' + esc(L.monthName(later)) : '') + '. Earlier months keep the budget they had.</p>' +
       '<label>Give me a heads-up at (% of the budget)<input id="budgetWarn" type="number" min="1" max="100" step="1" value="' + b.warnPct + '"></label>' +
       '<label class="check"><input id="countPlanned" type="checkbox"' + (b.countPlanned ? ' checked' : '') + '> Count planned contest entries</label>' +
-      '<div class="btnrow" style="margin-top:12px"><button class="primary" data-act="budget-save">Save budget</button>' + (b.budget !== null ? '<button data-act="budget-clear">Remove</button>' : '') + '</div>' +
-      '<p class="hint" style="margin-top:12px">Fees come from what you enter as "Fee paid" on submissions and manuscript entries. Unsent entries count as planned on their deadline.</p></section>';
-    right += '<section class="card"><h2>Fees in ' + y + '</h2>' + (b.items.length
-      ? '<table><tbody>' + b.items.slice(0, 14).map((i) => '<tr><td class="datecell">' + shortDate(i.date) + '</td><td><b>' + esc(i.name) + '</b><div class="sub">' + esc(i.what) + '</div></td><td class="num mono" style="' + (i.planned ? 'color:var(--blue)' : '') + '">' + money(i.amount) + '</td></tr>').join('') + '</tbody></table>'
-      : '<p class="hint">No fees recorded for ' + y + '.</p>') + '</section>';
+      '<div class="btnrow" style="margin-top:12px"><button class="primary" data-act="budget-save">Save budget</button>' + (b.budget !== null ? '<button data-act="budget-clear">Remove from ' + esc(name.split(' ')[0]) + ' on</button>' : '') + '</div>' +
+      '<p class="hint" style="margin-top:12px">Fees come from what you enter as "Fee paid" on submissions and manuscript entries. Unsent entries count as planned in the month of their deadline.</p></section>';
+    right += '<section class="card"><h2>Fees in ' + esc(name) + '</h2>' + (b.items.length
+      ? '<table><tbody>' + b.items.map((i) => '<tr><td class="datecell">' + shortDate(i.date) + '</td><td><b>' + esc(i.name) + '</b><div class="sub">' + esc(i.what) + '</div></td><td class="num mono" style="' + (i.planned ? 'color:var(--blue)' : '') + '">' + money(i.amount) + '</td></tr>').join('') + '</tbody></table>'
+      : '<p class="hint">No fees recorded for ' + esc(name) + '.</p>') + '</section>';
     return html + '<div class="budget"><div>' + left + '</div><div>' + right + '</div></div>';
   }
 
@@ -1617,16 +1626,16 @@
     'copy-query': (d) => copyText(queryText(d.id)),
     'queried': (d) => { L.markQueried(data, d.id, today()); commit('Marked a follow-up sent'); toast('Noted. Pen Pal will remind you again in 60 days.'); },
     'snooze-query': (d) => { L.snoozeQuery(data, d.id, today(), 30); commit('Snoozed a follow-up'); toast('Snoozed for 30 days'); },
-    'budget-year': (d) => { ui.budgetYear += Number(d.delta); render(); },
+    'budget-month': (d) => { ui.budgetMonth = d.month; render(); },
     'budget-save': () => {
       const amt = $('#budgetAmount').value, warn = $('#budgetWarn').value;
       if (amt !== '' && !(Number(amt) >= 0)) { toast('Enter the budget as a number of dollars.'); return; }
-      L.setBudget(data, ui.budgetYear, amt);
+      L.setBudget(data, ui.budgetMonth, amt);
       data.settings = L.normalizeSettings(Object.assign({}, data.settings, { budgetWarnPct: warn, countPlanned: $('#countPlanned').checked }));
       commit('Changed the fee budget');
       toast(amt === '' ? 'Budget removed' : 'Budget saved');
     },
-    'budget-clear': () => { L.setBudget(data, ui.budgetYear, ''); commit('Removed the fee budget'); },
+    'budget-clear': () => { L.setBudget(data, ui.budgetMonth, ''); commit('Removed the fee budget'); },
     'open-data-folder': async () => {
       const api = window.pywebview && window.pywebview.api;
       if (api && api.open_data_folder) { try { await api.open_data_folder(); } catch (e) { toast('Could not open the folder.'); } }

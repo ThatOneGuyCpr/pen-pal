@@ -166,21 +166,43 @@
       notes: str(e.notes, 5000),
     };
   }
-  function normalizeSettings(s) {
-    s = s || {};
-    const budgets = {};
-    if (s.budgets && typeof s.budgets === 'object') {
+  // Monthly fee budget, stored as changes: { 'YYYY-MM': amount } means "this amount from that month on",
+  // and null means "no budget from that month on". Changing it later leaves earlier months as they were.
+  function normalizeMonthlyBudget(s) {
+    const out = {};
+    if (s.monthlyBudget && typeof s.monthlyBudget === 'object') {
+      for (const k of Object.keys(s.monthlyBudget)) {
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(k)) continue;
+        const v = s.monthlyBudget[k];
+        const n = numOrNull(v);
+        if (v === null) out[k] = null;
+        else if (n !== null) out[k] = n;
+      }
+    } else if (s.budgets && typeof s.budgets === 'object') {
+      // Pen Pal 2.0 to 2.1 kept a yearly budget: carry it over as a twelfth a month from that January.
       for (const k of Object.keys(s.budgets)) {
         const n = numOrNull(s.budgets[k]);
-        if (/^\d{4}$/.test(k) && n !== null) budgets[k] = n;
+        if (/^\d{4}$/.test(k) && n !== null) out[k + '-01'] = Math.round((n / 12) * 100) / 100;
       }
     }
+    // Drop changes that change nothing (same as the month before, or "none" when there was none).
+    const tidy = {};
+    let last = null;
+    for (const k of Object.keys(out).sort()) {
+      if (out[k] === last) continue;
+      tidy[k] = out[k];
+      last = out[k];
+    }
+    return tidy;
+  }
+  function normalizeSettings(s) {
+    s = s || {};
     const pct = intOrNull(s.budgetWarnPct);
     const inRange = (v, lo, hi, dflt) => { const n = intOrNull(v); return n !== null && n >= lo && n <= hi ? n : dflt; };
     return {
       lastBackupDownload: dateOr(s.lastBackupDownload),
       backupSnoozedUntil: dateOr(s.backupSnoozedUntil),
-      budgets,
+      monthlyBudget: normalizeMonthlyBudget(s),
       budgetWarnPct: pct && pct >= 1 && pct <= 100 ? pct : 80,
       countPlanned: s.countPlanned !== false,
       theme: THEMES.includes(s.theme) ? s.theme : 'system',
@@ -840,13 +862,30 @@
   }
 
   // ---------- fee budget ----------
-  // Every fee for one calendar year: paid submission and entry fees, plus planned entries (not sent yet).
-  function feeItems(data, year, skip) {
+  const FULL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  function monthName(ym) { return FULL_MONTHS[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4); }
+  function addMonths(ym, n) {
+    const t = Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1 + n;
+    return Math.floor(t / 12) + '-' + String((t % 12) + 1).padStart(2, '0');
+  }
+  // The budget in force for a month: the latest change made in or before it. Null for none.
+  function budgetFor(settings, ym) {
+    const mb = normalizeSettings(settings).monthlyBudget;
+    let v = null;
+    for (const k of Object.keys(mb).sort()) {
+      if (k > ym) break;
+      v = mb[k];
+    }
+    return v;
+  }
+  // Every fee in a period ('YYYY' or 'YYYY-MM'): paid submission and entry fees, plus planned entries (not sent yet) on their deadline.
+  function feeItems(data, period, skip) {
     skip = skip || {};
-    const y = String(year);
+    const p = String(period);
+    const inP = (date) => !!date && date.slice(0, p.length) === p;
     const items = [];
     for (const s of data.submissions) {
-      if (s.id === skip.subId || !s.feePaid || !s.sentDate || s.sentDate.slice(0, 4) !== y) continue;
+      if (s.id === skip.subId || !s.feePaid || !inP(s.sentDate)) continue;
       const j = journalById(data, s.journalId);
       items.push({ date: s.sentDate, name: j ? j.name : '(deleted journal)', what: s.poemIds.length + ' poem' + (s.poemIds.length === 1 ? '' : 's'), amount: s.feePaid, planned: false, kind: 'submission', id: s.id });
     }
@@ -855,53 +894,65 @@
       const m = manuscriptById(data, e.manuscriptId);
       const what = 'Manuscript' + (m ? ': ' + m.title : '');
       if (e.status === 'planned') {
-        if (e.fee && e.deadline && e.deadline.slice(0, 4) === y) items.push({ date: e.deadline, name: e.name, what: 'Planned entry', amount: e.fee, planned: true, kind: 'entry', id: e.id });
-      } else if (e.feePaid && e.sentDate && e.sentDate.slice(0, 4) === y) {
+        if (e.fee && inP(e.deadline)) items.push({ date: e.deadline, name: e.name, what: 'Planned entry', amount: e.fee, planned: true, kind: 'entry', id: e.id });
+      } else if (e.feePaid && inP(e.sentDate)) {
         items.push({ date: e.sentDate, name: e.name, what, amount: e.feePaid, planned: false, kind: 'entry', id: e.id });
       }
     }
     items.sort((a, b) => b.date.localeCompare(a.date));
     return items;
   }
-  function budgetSummary(data, year, skip) {
+  const round2 = (n) => Math.round(n * 100) / 100;
+  // One month against that month's budget.
+  function budgetSummary(data, ym, skip) {
     const st = normalizeSettings(data.settings);
-    const items = feeItems(data, year, skip);
-    const months = Array.from({ length: 12 }, () => ({ spent: 0, planned: 0 }));
+    const items = feeItems(data, ym, skip);
     let spent = 0, planned = 0;
-    for (const i of items) {
-      const m = months[Number(i.date.slice(5, 7)) - 1];
-      if (i.planned) { planned += i.amount; m.planned += i.amount; } else { spent += i.amount; m.spent += i.amount; }
-    }
-    const round = (n) => Math.round(n * 100) / 100;
-    const budget = st.budgets[String(year)] === undefined ? null : st.budgets[String(year)];
-    const counted = round(spent + (st.countPlanned ? planned : 0));
+    for (const i of items) { if (i.planned) planned += i.amount; else spent += i.amount; }
+    const budget = budgetFor(st, ym);
+    const counted = round2(spent + (st.countPlanned ? planned : 0));
     return {
-      year: Number(year), budget, spent: round(spent), planned: round(planned), counted,
-      left: budget === null ? null : round(budget - counted),
-      warnAt: budget === null ? null : round((budget * st.budgetWarnPct) / 100),
-      warnPct: st.budgetWarnPct, countPlanned: st.countPlanned,
-      months: months.map((m) => ({ spent: round(m.spent), planned: round(m.planned) })), items,
+      month: ym, budget, spent: round2(spent), planned: round2(planned), counted,
+      left: budget === null ? null : round2(budget - counted),
+      warnAt: budget === null ? null : round2((budget * st.budgetWarnPct) / 100),
+      warnPct: st.budgetWarnPct, countPlanned: st.countPlanned, items,
     };
   }
-  // A plain-language note when a new fee goes over (or near) that year's budget. Null when fine or no budget.
+  // The twelve months of a year, each with its own budget, for the chart.
+  function budgetYear(data, year) {
+    const st = normalizeSettings(data.settings);
+    const months = Array.from({ length: 12 }, (_, i) => {
+      const ym = year + '-' + String(i + 1).padStart(2, '0');
+      return { month: ym, spent: 0, planned: 0, budget: budgetFor(st, ym) };
+    });
+    for (const i of feeItems(data, year)) {
+      const m = months[Number(i.date.slice(5, 7)) - 1];
+      if (i.planned) m.planned += i.amount; else m.spent += i.amount;
+    }
+    let spent = 0, planned = 0;
+    for (const m of months) { m.spent = round2(m.spent); m.planned = round2(m.planned); spent += m.spent; planned += m.planned; }
+    return { year: Number(year), months, spent: round2(spent), planned: round2(planned) };
+  }
+  // A plain-language note when a new fee goes over (or near) its month's budget. Null when fine or no budget.
   function budgetCheck(data, amount, date, skip) {
     const fee = numOrNull(amount);
     if (!fee || !isDate(date)) return null;
-    const year = date.slice(0, 4);
-    const sum = budgetSummary(data, year, skip);
+    const ym = date.slice(0, 7);
+    const sum = budgetSummary(data, ym, skip);
     if (sum.budget === null) return null;
-    const after = Math.round((sum.counted + fee) * 100) / 100;
+    const after = round2(sum.counted + fee);
     const $ = (n) => '$' + (Number.isInteger(n) ? n : n.toFixed(2));
-    if (after > sum.budget) return 'This fee would take you to ' + $(after) + ', over your ' + $(sum.budget) + ' fee budget for ' + year + '.';
-    if (after >= sum.warnAt) return 'This fee would bring you to ' + $(after) + ' of your ' + $(sum.budget) + ' fee budget for ' + year + '.';
+    if (after > sum.budget) return 'This fee would take you to ' + $(after) + ', over your ' + $(sum.budget) + ' fee budget for ' + monthName(ym) + '.';
+    if (after >= sum.warnAt) return 'This fee would bring you to ' + $(after) + ' of your ' + $(sum.budget) + ' fee budget for ' + monthName(ym) + '.';
     return null;
   }
-  function setBudget(data, year, amount) {
+  // Set (or, with '', remove) the monthly budget from this month on. Later changes you already made stay.
+  function setBudget(data, ym, amount) {
     const st = normalizeSettings(data.settings);
     const n = numOrNull(amount);
-    if (n === null) delete st.budgets[String(year)];
-    else st.budgets[String(year)] = n;
-    data.settings = normalizeSettings(Object.assign({}, data.settings, { budgets: st.budgets }));
+    const mb = Object.assign({}, st.monthlyBudget);
+    mb[ym] = n;
+    data.settings = normalizeSettings(Object.assign({}, data.settings, { monthlyBudget: mb }));
   }
 
   // ---------- follow-up (query) reminders ----------
@@ -1361,7 +1412,7 @@
     poemById, journalById, manuscriptById, entryById, activePoemIds, acceptedPoemIdsOf, placement, pendingSubsFor, poemState,
     withdrawAlerts, acceptSubmission, setSubmissionStatus, withdrawPoem, removePoem, removeJournal,
     isRecurring, windowsFrom, currentWindow, windowsText, parseWindowsText,
-    feeItems, budgetSummary, budgetCheck, setBudget,
+    feeItems, budgetFor, budgetSummary, budgetYear, budgetCheck, setBudget, monthName, addMonths,
     expectedReply, queryReminders, markQueried, snoozeQuery,
     suggestedCredit, rightsReminders,
     normalizeDirEntry, loadDirectory, dirToJournal, dirState, searchDirectory, dirIsStale, searchLinks,
