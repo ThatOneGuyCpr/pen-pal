@@ -249,7 +249,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     # Quiet, one-line logs; skip noisy static requests.
     def log_message(self, fmt, *args):
-        if self.path.startswith("/api/"):
+        # A windowed exe has no console: sys.stderr is None there, and writing to it would crash the request.
+        if self.path.startswith("/api/") and sys.stderr is not None:
             sys.stderr.write("%s\n" % (fmt % args))
 
     def end_headers(self):

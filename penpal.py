@@ -23,7 +23,13 @@ import time
 import urllib.request
 import webbrowser
 
-import server
+# A windowed exe (PyInstaller --windowed) starts with no console, so sys.stdout and sys.stderr
+# are None. Point them at the null device so nothing that prints or logs can crash the app.
+for _name in ("stdout", "stderr"):
+    if getattr(sys, _name) is None:
+        setattr(sys, _name, open(os.devnull, "w", encoding="utf-8"))
+
+import server  # noqa: E402
 
 
 def start_server():

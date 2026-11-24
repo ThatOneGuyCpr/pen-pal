@@ -319,5 +319,18 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(r.getheader("Content-Type"), "font/woff2")
 
 
+    def test_works_without_a_console(self):
+        # A windowed exe has sys.stderr = None; API requests used to crash while logging.
+        old = sys.stderr
+        sys.stderr = None
+        try:
+            s, raw = self.req("GET", "/api/info")
+            self.assertEqual(s, 200)
+            s, _ = self.put({"rev": 0, "poems": [], "journals": [], "submissions": []})
+            self.assertEqual(s, 200)
+        finally:
+            sys.stderr = old
+
+
 if __name__ == "__main__":
     unittest.main()
