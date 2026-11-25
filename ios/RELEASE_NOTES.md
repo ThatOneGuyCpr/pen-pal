@@ -1,4 +1,4 @@
-Pen Pal for iPhone 1.0.0
+Pen Pal for iPhone 1.0.1
 
 The first iPhone version. It uses the same Pen Pal file as your PCs, through iCloud Drive.
 
