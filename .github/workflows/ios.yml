@@ -57,6 +57,18 @@ jobs:
           cd ios
           bash scripts/screenshots.sh "$UDID" build/sim/Build/Products/Debug-iphonesimulator/PenPal.app
 
+      - name: Keep the screenshots on the ci-screens branch (for review)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cd ios/screens
+          git init -q -b ci-screens
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add *.png
+          git commit -qm "Screenshots for ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-screens
+          rm -rf .git
+
       - name: Build PenPal.ipa (unsigned, for LiveContainer or SideStore to sign)
         run: |
           cd ios
