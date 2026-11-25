@@ -1,0 +1,120 @@
+{
+ "rev": 13,
+ "saveId": "pc1",
+ "savedOn": "DESKTOP",
+ "savedAt": "2026-11-24T09:02:00",
+ "lineage": [
+  "pc0"
+ ],
+ "poems": [
+  {
+   "id": "p1",
+   "title": "Salt Year",
+   "status": "ready"
+  },
+  {
+   "id": "p2",
+   "title": "Tide Chart",
+   "status": "ready"
+  },
+  {
+   "id": "p3",
+   "title": "Ferry at Dusk",
+   "status": "draft"
+  },
+  {
+   "id": "p4",
+   "title": "What the Heron Knows",
+   "status": "ready"
+  }
+ ],
+ "journals": [
+  {
+   "id": "pl",
+   "name": "Poet Lore",
+   "url": "https://poetlore.submittable.com/submit",
+   "opens": "2025-04-01",
+   "closes": "2025-05-31",
+   "repeat": "yearly",
+   "extraWindows": [
+    {
+     "opens": "10-01",
+     "closes": "11-30"
+    }
+   ],
+   "notify": true,
+   "replyDays": 210,
+   "pays": "yes",
+   "reprints": "no",
+   "fee": 0,
+   "maxPoems": 5,
+   "simSubs": "yes",
+   "notes": "America's oldest poetry journal, since 1889. Always free. Up to five poems, ten pages."
+  },
+  {
+   "id": "kw",
+   "name": "Kweli Journal",
+   "url": "https://www.kwelijournal.org/submit",
+   "opens": "2025-09-01",
+   "closes": "2026-05-30",
+   "repeat": "yearly",
+   "pays": "yes",
+   "fee": 0,
+   "maxPoems": 3,
+   "simSubs": "yes"
+  },
+  {
+   "id": "po",
+   "name": "Poetry",
+   "url": "https://www.poetryfoundation.org/poetrymagazine/submit",
+   "opens": "2025-09-15",
+   "closes": "2026-06-15",
+   "repeat": "yearly",
+   "pays": "yes",
+   "fee": 0,
+   "simSubs": "yes"
+  },
+  {
+   "id": "rm",
+   "name": "Rust & Moth",
+   "url": "https://rustandmoth.com/submissions",
+   "opens": "2026-12-01",
+   "closes": "2026-12-20",
+   "repeat": "yearly",
+   "extraWindows": [
+    {
+     "opens": "06-01",
+     "closes": "06-20"
+    },
+    {
+     "opens": "09-01",
+     "closes": "09-20"
+    }
+   ],
+   "notify": true,
+   "replyDays": 60,
+   "pays": "no",
+   "reprints": "no",
+   "fee": 0,
+   "simSubs": "yes",
+   "notes": "Four short windows a year. Uses web-length lines, so very long lines may need reworking."
+  }
+ ],
+ "submissions": [
+  {
+   "id": "s1",
+   "journalId": "kw",
+   "poemIds": [
+    "p3"
+   ],
+   "sentDate": "2026-07-01",
+   "status": "pending"
+  }
+ ],
+ "manuscripts": [],
+ "entries": [],
+ "settings": {
+  "theme": "dark",
+  "notifyDays": 3
+ }
+}

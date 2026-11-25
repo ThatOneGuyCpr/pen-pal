@@ -73,6 +73,17 @@ Tip: in File Explorer, right-click the Pen Pal folder in iCloud Drive and choose
 
 To stop syncing, choose **Move back to this PC**.
 
+## Pen Pal for iPhone
+
+The iPhone app uses the same file as your PCs, through iCloud Drive. Set up the PC side first (Using Pen Pal on two computers, above), so your data is in a folder like `iCloudDrive\Pen Pal`.
+
+1. On your iPhone, open the latest "Pen Pal for iPhone" release on the GitHub releases page and download `PenPal.ipa`.
+2. Open it in LiveContainer (share it to LiveContainer, or use its + button). SideStore works too, but counts against the free account's three apps.
+3. In LiveContainer, long-press Pen Pal, open Settings, and turn on **Fix File Picker & Local Notification**. Leave the legacy file picker fix off: it copies files instead of opening them.
+4. Open Pen Pal, choose the Pen Pal folder in iCloud Drive, and allow notifications.
+
+It has the Desk, your journals with their reminder bells, the journal directory, poems, and what you've sent, with the same rules as the Windows app (it runs the same `logic.js`). Manuscripts, import and export, insights and the fee budget settings are on the Windows app only, for now. Widgets would need a paid Apple developer account.
+
 ## Settings
 
 The last item in the sidebar. It has:

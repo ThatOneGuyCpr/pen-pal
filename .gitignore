@@ -6,3 +6,9 @@ __pycache__/
 *.spec
 check.txt
 PenPal.exe
+ios/PenPal.xcodeproj/
+ios/Payload/
+ios/*.ipa
+ios/screens/
+ios/test.log
+ios/PenPal/Info.plist

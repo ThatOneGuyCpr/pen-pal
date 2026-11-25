@@ -1,0 +1,91 @@
+name: iPhone build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  iphone:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Bridge tests (Node)
+        run: node --test tests/ios-bridge.test.js tests/logic.test.js
+
+      - name: Pick the newest Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          cd ios && xcodegen generate
+
+      - name: Pick a simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import sys, json
+          devs = json.load(sys.stdin)['devices']
+          rt = sorted([k for k in devs if 'iOS' in k], key=lambda k: [int(x) for x in k.split('iOS-')[-1].split('-')])
+          for k in reversed(rt):
+              for d in devs[k]:
+                  if d['name'].startswith('iPhone') and 'Pro' not in d['name'] and 'Max' not in d['name'] and 'Plus' not in d['name']:
+                      print(d['udid']); sys.exit()
+          ")
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl list devices | grep "$UDID"
+
+      - name: Unit tests in the simulator
+        run: |
+          cd ios
+          set -o pipefail
+          xcodebuild test -project PenPal.xcodeproj -scheme PenPal -destination "id=$UDID" -derivedDataPath build/sim CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log | grep -E "error:|warning: .*PenPal/|Test Case .*(passed|failed)|Executed|BUILD|TEST " || true
+          grep -q "TEST SUCCEEDED" test.log || { tail -80 test.log; exit 1; }
+
+      - name: Screenshots in the simulator
+        run: |
+          cd ios
+          bash scripts/screenshots.sh "$UDID" build/sim/Build/Products/Debug-iphonesimulator/PenPal.app
+
+      - name: Build PenPal.ipa (unsigned, for LiveContainer or SideStore to sign)
+        run: |
+          cd ios
+          set -o pipefail
+          xcodebuild build -project PenPal.xcodeproj -scheme PenPal -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" 2>&1 | tail -5
+          rm -rf Payload && mkdir Payload
+          cp -R build/device/Build/Products/Release-iphoneos/PenPal.app Payload/
+          zip -qry PenPal.ipa Payload
+          ls -la PenPal.ipa
+          unzip -l PenPal.ipa | grep -E "logic.js|bridge.js|directory.json|young-serif|Info.plist" 
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PenPal-iphone
+          path: |
+            ios/PenPal.ipa
+            ios/screens/*.png
+
+      - name: Publish an iPhone release when its version changes
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(grep -m1 'MARKETING_VERSION' ios/project.yml | sed -E 's/.*"([0-9.]+)".*/\1/')
+          tag="iphone-v$v"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag already released"
+          else
+            # --latest=false keeps the Windows release as "latest", which the Windows app's updater reads.
+            gh release create "$tag" ios/PenPal.ipa --target "$GITHUB_SHA" --title "Pen Pal for iPhone $v" --notes-file ios/RELEASE_NOTES.md --latest=false
+          fi
