@@ -34,7 +34,7 @@ final class BridgeTests: XCTestCase {
         XCTAssertNotNil(b.json(DocSettings.self, "settings", today), b.lastError ?? "settings")
         XCTAssertNotNil(b.json(JForm.self, "blankJournal"), b.lastError ?? "blank")
         let plan = try XCTUnwrap(b.json([PlanItem].self, "reminderPlan", today, 60, "[]"), b.lastError ?? "plan")
-        XCTAssertEqual(plan.first?.title, "Rust & Moth opens in 3 days")
+        XCTAssertEqual(plan.map(\.title), ["Poet Lore closes in 3 days", "Rust & Moth opens in 3 days", "Rust & Moth closes in 3 days"])
         let summary = try XCTUnwrap(b.json(Summary.self, "summary", Self.doc))
         XCTAssertEqual(summary.counts, "2 journals, 2 poems, 1 submission")
     }
