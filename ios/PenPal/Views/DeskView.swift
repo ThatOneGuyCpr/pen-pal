@@ -58,7 +58,7 @@ struct DeskView: View {
                                         }
                                         HStack(spacing: 8) {
                                             Button("Send poems") { send = SendTarget(id: c.id) }
-                                                .buttonStyle(PrimaryButtonStyle()).frame(maxWidth: .infinity)
+                                                .buttonStyle(PrimaryButtonStyle(wide: true))
                                             BellButton(on: c.notify, name: c.name) { store.change("setNotify", c.id, !c.notify) }
                                         }
                                     }

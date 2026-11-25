@@ -8,14 +8,14 @@ struct SentView: View {
     var body: some View {
         let subs = store.subs
         List {
-            Section("Waiting") {
+            Section(header: ListHeader("Waiting")) {
                 if subs?.pending.isEmpty ?? true {
                     Text("Nothing out right now.").font(F.sans(14)).foregroundStyle(P.muted).listRowBackground(P.panel)
                 }
                 ForEach(subs?.pending ?? []) { s in row(s) }
             }
             if let done = subs?.done, !done.isEmpty {
-                Section("Answered") {
+                Section(header: ListHeader("Answered")) {
                     ForEach(done) { s in row(s) }
                 }
             }
@@ -63,7 +63,7 @@ struct SubSheet: View {
                     Text(sub.titles).font(F.sans(16, .semibold))
                     Text(sub.line).foregroundStyle(P.muted)
                 }
-                Section("Their answer") {
+                Section(header: ListHeader("Their answer")) {
                     answer("Accepted", "accepted")
                     answer("Declined", "rejected")
                     answer("I withdrew it", "withdrawn")
@@ -77,7 +77,7 @@ struct SubSheet: View {
                                 dismiss()
                             }
                         }
-                    } header: { Text("One poem at a time") } footer: { Text("For when one poem was taken elsewhere. The rest stay with them.") }
+                    } header: { ListHeader("One poem at a time") } footer: { ListFooter("For when one poem was taken elsewhere. The rest stay with them.") }
                 }
                 Section {
                     Button("Remove this submission", role: .destructive) { confirmDelete = true }

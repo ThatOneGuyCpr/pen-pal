@@ -143,8 +143,8 @@ struct ProblemView: View {
             Text("Pen Pal can't open your data").font(F.serif(28)).padding(.horizontal, 24)
             Text(message).foregroundStyle(P.ink2).padding(.horizontal, 24)
             VStack(spacing: 8) {
-                Button("Try again") { store.start() }.buttonStyle(PrimaryButtonStyle()).frame(maxWidth: .infinity)
-                Button("Choose another folder") { store.forgetFolder() }.buttonStyle(PrimaryButtonStyle(quiet: true))
+                Button("Try again") { store.start() }.buttonStyle(PrimaryButtonStyle(wide: true))
+                Button("Choose another folder") { store.forgetFolder() }.buttonStyle(PrimaryButtonStyle(quiet: true, wide: true))
             }
             .padding(.horizontal, 24)
             Spacer()

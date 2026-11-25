@@ -183,10 +183,10 @@ struct JournalDetailView: View {
 
                     VStack(spacing: 8) {
                         Button(j.open ? "Send poems" : "Log poems for it") { send = SendTarget(id: j.id) }
-                            .buttonStyle(PrimaryButtonStyle()).frame(maxWidth: .infinity)
+                            .buttonStyle(PrimaryButtonStyle(wide: true))
                         if let url = URL(string: j.url), !j.url.isEmpty {
                             Button("Open their submission page") { openURL(url) }
-                                .buttonStyle(PrimaryButtonStyle(quiet: true))
+                                .buttonStyle(PrimaryButtonStyle(quiet: true, wide: true))
                         }
                     }
                 }

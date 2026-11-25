@@ -26,7 +26,7 @@ struct JournalEditView: View {
                     TextField("Submission page (optional)", text: $form.url)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
-                Section("Reading period") {
+                Section(header: ListHeader("Reading period")) {
                     Toggle("Open all year", isOn: $form.always)
                     if !form.always {
                         Toggle("Has reading dates", isOn: hasDates)
@@ -41,7 +41,7 @@ struct JournalEditView: View {
                         Toggle("Remind me before it opens and closes", isOn: $form.notify)
                     }
                 }
-                Section("What they want") {
+                Section(header: ListHeader("What they want")) {
                     LabeledContent("Fee") { TextField("Free, or $3", text: $form.fee).multilineTextAlignment(.trailing).keyboardType(.decimalPad) }
                     LabeledContent("Poems at a time") { TextField("Up to", text: $form.maxPoems).multilineTextAlignment(.trailing).keyboardType(.numberPad) }
                     LabeledContent("Usual reply (days)") { TextField("Days", text: $form.replyDays).multilineTextAlignment(.trailing).keyboardType(.numberPad) }
@@ -49,7 +49,7 @@ struct JournalEditView: View {
                     yesNo("Pays", $form.pays)
                     yesNo("Takes reprints", $form.reprints)
                 }
-                Section("Notes") {
+                Section(header: ListHeader("Notes")) {
                     TextField("Anything worth remembering", text: $form.notes, axis: .vertical).lineLimit(3...8)
                 }
                 if !error.isEmpty {
@@ -59,7 +59,7 @@ struct JournalEditView: View {
                     Section {
                         Button("Remove this journal", role: .destructive) { confirmDelete = true }
                     } footer: {
-                        Text("Its submissions are removed with it.")
+                        ListFooter("Its submissions are removed with it.")
                     }
                 }
             }
@@ -138,7 +138,7 @@ struct FindView: View {
                     .listRowBackground(P.panel)
                 }
             } footer: {
-                if let dir { Text("\(dir.total) journals, checked by hand on \(dir.checked). Always confirm dates and fees on their site before you send.") }
+                if let dir { ListFooter("\(dir.total) journals, checked by hand on \(dir.checked). Always confirm dates and fees on their site before you send.") }
             }
         }
         .scrollContentBackground(.hidden)

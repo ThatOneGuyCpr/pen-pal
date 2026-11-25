@@ -73,7 +73,7 @@ struct SendSheet: View {
                         .tint(P.blue)
                     }
                 } header: {
-                    Text(f.max.map { "Poems (\(picked.count) of up to \($0))" } ?? "Poems (\(picked.count))")
+                    ListHeader(f.max.map { "Poems (\(picked.count) of up to \($0))" } ?? "Poems (\(picked.count))")
                 }
                 Section {
                     DatePicker("Date sent", selection: $sent, displayedComponents: .date)
@@ -82,7 +82,7 @@ struct SendSheet: View {
                     }
                 }
                 if let check, !(check.ok.isEmpty && check.warn.isEmpty) {
-                    Section("Before you send") {
+                    Section(header: ListHeader("Before you send")) {
                         ForEach(check.ok, id: \.self) { line in
                             Label { Text(line).font(F.sans(14)) } icon: { Image(systemName: "checkmark").foregroundStyle(P.blue) }
                         }

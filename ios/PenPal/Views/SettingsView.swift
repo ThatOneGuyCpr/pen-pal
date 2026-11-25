@@ -23,8 +23,8 @@ struct SettingsView: View {
                     }
                 }
                 LabeledContent("Backups on this iPhone", value: "\(Local.backupCount)")
-            } header: { Text("Your data") } footer: {
-                Text("Shared with your PCs through iCloud Drive. If two devices change things before iCloud catches up, Pen Pal asks which to keep. Backups are in the Files app, under Pen Pal.")
+            } header: { ListHeader("Your data") } footer: {
+                ListFooter("Shared with your PCs through iCloud Drive. If two devices change things before iCloud catches up, Pen Pal asks which to keep. Backups are in the Files app, under Pen Pal.")
             }
 
             Section {
@@ -56,16 +56,16 @@ struct SettingsView: View {
                     Task { testResult = await store.reminders.sendTest() ?? "Sent. It should appear in a moment." }
                 }
                 if !testResult.isEmpty { Text(testResult).font(F.sans(13)).foregroundStyle(P.muted) }
-            } header: { Text("Reading period reminders") } footer: {
+            } header: { ListHeader("Reading period reminders") } footer: {
                 if permission == .denied {
-                    Text("Notifications are off for Pen Pal. Turn them on in the iPhone's Settings, Notifications. In LiveContainer, also turn on Fix File Picker & Local Notification for Pen Pal.")
+                    ListFooter("Notifications are off for Pen Pal. Turn them on in the iPhone's Settings, Notifications. In LiveContainer, also turn on Fix File Picker & Local Notification for Pen Pal.")
                 } else {
-                    Text("Ring the bell on a journal to get these. Your PCs remind you too; if you get both, turn one off.")
+                    ListFooter("Ring the bell on a journal to get these. Your PCs remind you too; if you get both, turn one off.")
                 }
             }
 
             if let s {
-                Section("Appearance") {
+                Section(header: ListHeader("Appearance")) {
                     Picker("Theme", selection: Binding(get: { s.theme }, set: { store.change("setSetting", "theme", "\"\($0)\"") })) {
                         Text("Match iPhone").tag("system")
                         Text("Light").tag("light")

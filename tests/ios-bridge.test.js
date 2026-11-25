@@ -62,7 +62,7 @@ test('journals list, filters and a journal page with its year bar', () => {
   assert.deepEqual(J(PP.journals(TODAY, 'open', 'kweli')).items.map((i) => i.name), ['Kweli Journal']);
   const rm = J(PP.journal('rm', TODAY));
   assert.equal(rm.periodsTitle, 'Reading periods, every year, 3 windows');
-  assert.equal(rm.periodsText, 'Dec 1 to Dec 20; Jun 1 to Jun 20; Sep 1 to Sep 20.');
+  assert.equal(rm.periodsText, 'Jun 1 to Jun 20; Sep 1 to Sep 20; Dec 1 to Dec 20.');
   assert.equal(rm.bars.length, 3);
   assert.ok(rm.todayPos > 0.89 && rm.todayPos < 0.9);
   assert.equal(rm.remindText, 'Nov 28 and Dec 17, 9 AM');

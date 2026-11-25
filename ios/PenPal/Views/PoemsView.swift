@@ -48,7 +48,7 @@ struct AddPoemsSheet: View {
                 Section {
                     TextField("One title per line", text: $text, axis: .vertical).lineLimit(5...14)
                 } footer: {
-                    Text("Titles only. Pen Pal never keeps the poems themselves.")
+                    ListFooter("Titles only. Pen Pal never keeps the poems themselves.")
                 }
                 Section {
                     Picker("They are", selection: $ready) {
@@ -97,13 +97,13 @@ struct PoemDetailView: View {
                         Text("Published elsewhere").tag("published")
                     }
                 } footer: {
-                    Text(p.label)
+                    ListFooter(p.label)
                 }
-                Section("Notes") {
+                Section(header: ListHeader("Notes")) {
                     TextField("Revisions, where it fits, anything", text: $notes, axis: .vertical).lineLimit(3...8)
                 }
                 if !p.history.isEmpty {
-                    Section("Where it's been") {
+                    Section(header: ListHeader("Where it's been")) {
                         ForEach(p.history) { h in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(h.journal).font(F.sans(15, .semibold))

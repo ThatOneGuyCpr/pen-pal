@@ -42,9 +42,9 @@ struct ConnectView: View {
                 VStack(spacing: 6) {
                     if let check, check.error == nil {
                         Button(check.summary == nil ? "Start Pen Pal here" : "Use this data") { use(check.url) }
-                            .buttonStyle(PrimaryButtonStyle()).disabled(working)
+                            .buttonStyle(PrimaryButtonStyle(wide: true)).disabled(working)
                     } else {
-                        Button("Choose folder in Files") { picking = true }.buttonStyle(PrimaryButtonStyle())
+                        Button("Choose folder in Files") { picking = true }.buttonStyle(PrimaryButtonStyle(wide: true))
                     }
                 }
                 .frame(maxWidth: .infinity)

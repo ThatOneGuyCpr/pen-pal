@@ -131,11 +131,26 @@ extension View {
     func card(padding: CGFloat = 16) -> some View { modifier(CardBackground(padding: padding)) }
 }
 
+/// Section headings and footnotes in lists, at iOS's usual small sizes in Pen Pal's type.
+struct ListHeader: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View { Text(text).font(F.sans(13, .semibold)).foregroundStyle(P.muted).textCase(nil) }
+}
+
+struct ListFooter: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View { Text(text).font(F.sans(13)).foregroundStyle(P.muted) }
+}
+
 struct PrimaryButtonStyle: ButtonStyle {
     var quiet = false
+    var wide = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(F.sans(15, .semibold))
+            .frame(maxWidth: wide ? .infinity : nil)
             .frame(minHeight: 44)
             .padding(.horizontal, 18)
             .foregroundStyle(quiet ? P.blue : P.onBlue)

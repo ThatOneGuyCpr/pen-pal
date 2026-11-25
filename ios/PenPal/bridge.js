@@ -200,7 +200,7 @@
       title = 'Reading periods, every year';
       const temps = [{ opens: j.opens.slice(5), closes: j.closes.slice(5) }].concat(j.extraWindows);
       const seen = new Set();
-      const uniq = temps.filter((w) => (seen.has(w.opens + w.closes) ? false : seen.add(w.opens + w.closes)));
+      const uniq = temps.filter((w) => (seen.has(w.opens + w.closes) ? false : seen.add(w.opens + w.closes))).sort((a, b) => a.opens.localeCompare(b.opens));
       for (const w of uniq) {
         const o = y + '-' + w.opens, c = y + '-' + w.closes;
         if (c >= o) bars.push({ start: pos(o), width: Math.max(0.01, pos(c) - pos(o) + 1 / yearLen) });
