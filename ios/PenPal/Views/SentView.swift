@@ -4,6 +4,7 @@ struct SentView: View {
     @Environment(Store.self) private var store
     @State private var open: SubRow?
     @State private var send: SendTarget?
+    @State private var editing: SubForm?
 
     var body: some View {
         let subs = store.subs
@@ -24,12 +25,20 @@ struct SentView: View {
         .background(P.bg)
         .navigationTitle("Sent")
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                NavigationLink(value: InsightsRoute()) { Image(systemName: "chart.bar") }.accessibilityLabel("Insights")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { send = SendTarget(id: "") } label: { Image(systemName: "plus") }.accessibilityLabel("Log a submission")
             }
         }
-        .sheet(item: $open) { s in SubSheet(sub: s) }
+        .navigationDestination(for: InsightsRoute.self) { _ in InsightsView() }
+        .sheet(item: $open) { s in SubSheet(sub: s) { form in editing = form } }
         .sheet(item: $send) { t in SendSheet(journalId: t.id) }
+        .sheet(item: $editing) { f in SendSheet(journalId: f.journalId, editing: f) }
+        .onAppear {
+            if store.demoScreen.hasPrefix("editsub:") { editing = store.subForm(String(store.demoScreen.dropFirst(8))); store.demoScreen = "" }
+        }
     }
 
     private func row(_ s: SubRow) -> some View {
@@ -53,6 +62,7 @@ struct SubSheet: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     let sub: SubRow
+    var onEdit: (SubForm) -> Void = { _ in }
     @State private var alerts: [String] = []
     @State private var confirmDelete = false
 
@@ -85,7 +95,17 @@ struct SubSheet: View {
             }
             .navigationTitle(sub.journal)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Edit") {
+                        if let f = store.subForm(sub.id) {
+                            dismiss()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { onEdit(f) }
+                        }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
             .alert("Withdraw it elsewhere", isPresented: Binding(get: { !alerts.isEmpty }, set: { if !$0 { alerts = []; dismiss() } })) {
                 Button("OK") {}
             } message: {

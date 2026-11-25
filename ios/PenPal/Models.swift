@@ -257,3 +257,103 @@ struct JournalRoute: Hashable { let id: String }
 struct PoemRoute: Hashable { let id: String }
 struct FindRoute: Hashable {}
 struct SendTarget: Identifiable { let id: String }  // a journal id, or "" to pick one first
+
+// MARK: - 1.1: undo, editing submissions, budget, insights
+
+struct HistoryInfo: Decodable {
+    var undo: String
+    var redo: String
+}
+
+struct UndoResult: Decodable {
+    var label: String
+}
+
+struct SubForm: Codable, Identifiable {
+    var id: String
+    var journalId: String
+    var poemIds: [String]
+    var sentDate: String
+    var feePaid: String
+    var notes: String
+    var status: String
+    var responseDate: String
+}
+
+struct BudgetModel: Decodable {
+    var month: String
+    var name: String
+    var prev: String
+    var next: String
+    var thisMonth: String
+    var spent: String
+    var planned: String
+    var countPlanned: Bool
+    var warnPct: Int
+    var budget: String
+    var budgetValue: String
+    var left: String
+    var over: Bool
+    var warnAt: String
+    var spentFrac: Double
+    var plannedFrac: Double
+    var warnFrac: Double
+    var applies: String
+    var items: [BudgetItem]
+    var year: Int
+    var yearLine: String
+    var months: [BudgetMonth]
+}
+
+struct BudgetItem: Decodable, Hashable {
+    var date: String
+    var name: String
+    var what: String
+    var amount: String
+    var planned: Bool
+}
+
+struct BudgetMonth: Decodable, Identifiable {
+    var month: String
+    var label: String
+    var total: Double
+    var spent: Double
+    var planned: Double
+    var budget: Double?
+    var height: Double
+    var cap: Double?
+    var over: Bool
+    var text: String
+    var id: String { month }
+}
+
+struct Insights: Decodable {
+    var empty: Bool
+    var tiles: [Tile]
+    var timed: [BarRow]
+    var answered: [BarRow]
+    var buckets: [BarRow]
+    var counts: String
+}
+
+struct Tile: Decodable, Hashable {
+    var value: String
+    var label: String
+}
+
+struct BarRow: Decodable, Hashable {
+    var label: String
+    var sub: String
+    var frac: Double
+    var text: String
+}
+
+struct BudgetRoute: Hashable {}
+struct InsightsRoute: Hashable {}
+
+/// The bar that offers Undo (or Redo) after a change.
+struct UndoBar: Equatable {
+    var text: String
+    var redo: Bool
+    var id = UUID()
+}

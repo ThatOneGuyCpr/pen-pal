@@ -9,6 +9,7 @@
   const L = g.Logic;
   let DOC = L.emptyData();
   let DIR = { checked: '', journals: [] };
+  let HIST = L.createHistory(50);
   const PP = {};
   const out = (v) => JSON.stringify(v);
   const META = ['rev', 'saveId', 'savedOn', 'savedAt', 'lineage'];
@@ -62,8 +63,27 @@
     PP._plan(today, 120, []).filter((a) => a.journalId === journalId).map((a) => fmt(a.fire, today));
 
   // ---------- the document ----------
-  PP.load = (json) => { DOC = L.normalize(JSON.parse(json)); return out(PP._meta(DOC)); };
-  PP.fresh = () => { DOC = L.emptyData(); return out(PP._meta(DOC)); };
+  // Loading a file (at start, or another device's save) starts undo over: undoing must never bring back
+  // what the other device changed.
+  PP.load = (json) => { DOC = L.normalize(JSON.parse(json)); HIST = L.createHistory(50); return out(PP._meta(DOC)); };
+  PP.fresh = () => { DOC = L.emptyData(); HIST = L.createHistory(50); return out(PP._meta(DOC)); };
+
+  // ---------- undo (logic.js's history; snapshots leave the save chain alone) ----------
+  PP.checkpoint = (label) => { L.historyRecord(HIST, L.snapshot(DOC), label || ''); return true; };
+  PP.undo = () => {
+    const e = L.historyUndo(HIST, L.snapshot(DOC));
+    if (!e) return out(null);
+    DOC = L.restoreSnapshot(e.json, DOC);
+    return out({ label: e.label });
+  };
+  PP.redo = () => {
+    const e = L.historyRedo(HIST, L.snapshot(DOC));
+    if (!e) return out(null);
+    DOC = L.restoreSnapshot(e.json, DOC);
+    return out({ label: e.label });
+  };
+  PP.dropCheckpoint = () => { HIST.past.pop(); return true; };  // the change did nothing after all
+  PP.history = () => out({ undo: HIST.past.length ? HIST.past[HIST.past.length - 1].label : '', redo: HIST.future.length ? HIST.future[HIST.future.length - 1].label : '' });
   PP.json = () => JSON.stringify(DOC);
   PP._meta = (d) => ({ rev: Number(d.rev) || 0, saveId: String(d.saveId || ''), savedOn: String(d.savedOn || ''), savedAt: String(d.savedAt || ''), lineage: Array.isArray(d.lineage) ? d.lineage : [] });
   PP.meta = () => out(PP._meta(DOC));
@@ -331,7 +351,7 @@
   PP.journalPicker = (today) => out(DOC.journals.map((j) => ({ j, st: status(j, today) }))
     .sort((a, b) => (b.st.open - a.st.open) || a.j.name.localeCompare(b.j.name))
     .map(({ j, st }) => ({ id: j.id, name: j.name, line: st.line })));
-  PP.sendForm = (journalId, today) => {
+  PP.sendForm = (journalId, today, subId) => {
     const j = L.journalById(DOC, journalId);
     if (!j) return out(null);
     const st = status(j, today);
@@ -339,16 +359,19 @@
     if (j.maxPoems) bits.push('Up to ' + plural(j.maxPoems, 'poem') + '.');
     const poems = DOC.poems.map((p) => Object.assign({ id: p.id, title: p.title }, poemLine(p, today)))
       .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || a.title.localeCompare(b.title))
-      .map((p) => Object.assign(p, { blocked: p.state === 'published' }));
+      .map((p) => {
+        const mine = subId ? (DOC.submissions.find((x) => x.id === subId) || { poemIds: [] }).poemIds.includes(p.id) : false;
+        return Object.assign(p, { blocked: p.state === 'published' && !mine });
+      });
     return out({ journal: { id: j.id, name: j.name, line: bits.join(' ') }, poems, max: j.maxPoems || null, fee: j.fee === null ? '' : String(j.fee) });
   };
   PP.sendCheck = (json, today) => {
     const d = JSON.parse(json);
-    const draft = { poemIds: d.poemIds || [], journalId: d.journalId, sentDate: d.sentDate || today, feePaid: d.feePaid };
+    const draft = { id: d.id || undefined, poemIds: d.poemIds || [], journalId: d.journalId, sentDate: d.sentDate || today, feePaid: d.feePaid };
     const warn = L.checkSubmission(DOC, draft, today).map((w) => w.replace(/closed on (\d{4}-\d{2}-\d{2})/, (m, x) => 'closed on ' + fmt(x, today)).replace(/until (\d{4}-\d{2}-\d{2})/, (m, x) => 'until ' + fmt(x, today)));
     const ok = [];
     const j = L.journalById(DOC, d.journalId);
-    if (j && draft.poemIds.length) {
+    if (j && draft.poemIds.length && !d.id) {
       if (j.maxPoems && draft.poemIds.length <= j.maxPoems) ok.push(plural(draft.poemIds.length, 'poem') + ' is within ' + j.name + "'s limit of " + j.maxPoems + '.');
       const exp = L.expectedReply(DOC, j);
       const when = fmt(L.addDays(draft.sentDate, exp.days), today);
@@ -387,6 +410,86 @@
   PP.markQueried = (id, today) => { L.markQueried(DOC, id, today); return true; };
   PP.snooze = (id, today) => { L.snoozeQuery(DOC, id, today, 30); return true; };
   PP.removeSub = (id) => { DOC.submissions = DOC.submissions.filter((s) => s.id !== id); return true; };
+  // Editing a logged submission, as the Windows app's Edit submission dialog does.
+  PP.subForm = (id) => {
+    const s = DOC.submissions.find((x) => x.id === id);
+    if (!s) return out(null);
+    return out({ id: s.id, journalId: s.journalId, poemIds: s.poemIds, sentDate: s.sentDate, feePaid: s.feePaid === null ? '' : String(s.feePaid),
+      notes: s.notes, status: s.status, responseDate: s.responseDate || '' });
+  };
+  PP.saveSub = (json) => {
+    const f = JSON.parse(json);
+    const s = DOC.submissions.find((x) => x.id === f.id);
+    if (!s) return out({ id: '', error: 'That submission is gone.' });
+    if (!L.journalById(DOC, f.journalId)) return out({ id: '', error: 'Pick a journal.' });
+    const poemIds = f.poemIds || [];
+    if (!poemIds.length) return out({ id: '', error: 'Pick at least one poem.' });
+    if (f.responseDate && f.sentDate && f.responseDate < f.sentDate) return out({ id: '', error: 'The answer is dated before the poems were sent.' });
+    const fields = { poemIds, journalId: f.journalId, sentDate: f.sentDate, feePaid: f.feePaid === '' ? null : L.parseFee(String(f.feePaid)), notes: String(f.notes || '') };
+    if (s.status !== 'pending' && f.responseDate) fields.responseDate = f.responseDate;
+    Object.assign(s, L.normalizeSubmission(Object.assign({}, s, fields, {
+      acceptedPoemIds: s.acceptedPoemIds.filter((x) => poemIds.includes(x)),
+      withdrawnPoemIds: s.withdrawnPoemIds.filter((x) => poemIds.includes(x)),
+    })));
+    return out({ id: s.id, error: '' });
+  };
+
+  // ---------- fee budget (monthly; logic.js keeps each change from its month on) ----------
+  PP.budget = (ym, today) => {
+    const b = L.budgetSummary(DOC, ym);
+    const yr = L.budgetYear(DOC, ym.slice(0, 4));
+    const st = L.normalizeSettings(DOC.settings);
+    const name = MONTH[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4);
+    const frac = (n) => (b.budget ? Math.min(1, n / Math.max(b.budget, 0.01)) : 0);
+    const later = Object.keys(st.monthlyBudget).filter((k) => k > ym).sort()[0];
+    const max = Math.max(1, ...yr.months.map((m) => Math.max(m.spent + m.planned, m.budget || 0)));
+    return out({
+      month: ym, name, prev: L.addMonths(ym, -1), next: L.addMonths(ym, 1), thisMonth: today.slice(0, 7),
+      spent: money(b.spent), planned: b.planned ? money(b.planned) : '', countPlanned: b.countPlanned, warnPct: b.warnPct,
+      budget: b.budget === null ? '' : money(b.budget), budgetValue: b.budget === null ? '' : String(b.budget),
+      left: b.budget === null ? '' : b.left >= 0 ? money(b.left) + ' left' : money(-b.left) + ' over budget', over: b.left !== null && b.left < 0,
+      warnAt: b.warnAt === null ? '' : money(b.warnAt),
+      spentFrac: frac(b.spent), plannedFrac: b.countPlanned ? frac(b.planned) : 0, warnFrac: b.warnPct / 100,
+      applies: 'Applies from ' + name + ' on' + (later ? ', until the change you made for ' + MONTH[Number(later.slice(5, 7)) - 1] + ' ' + later.slice(0, 4) : '') + '. Earlier months keep the budget they had.',
+      items: b.items.map((i) => ({ date: fmt(i.date, today), name: i.name, what: i.what, amount: money(i.amount), planned: i.planned })),
+      year: yr.year, yearLine: money(yr.spent) + ' paid' + (yr.planned ? ', ' + money(yr.planned) + ' planned' : '') + ' in ' + yr.year,
+      months: yr.months.map((m, i) => ({ month: m.month, label: MON[i], total: m.spent + m.planned, spent: m.spent, planned: m.planned,
+        budget: m.budget, height: (m.spent + m.planned) / max, cap: m.budget === null ? null : m.budget / max,
+        over: m.budget !== null && m.spent + m.planned > m.budget, text: money(m.spent + m.planned) })),
+    });
+  };
+  PP.setBudget = (ym, amount) => { L.setBudget(DOC, ym, String(amount)); return true; };
+  PP.saveBudget = (ym, amount, warnPct) => {
+    L.setBudget(DOC, ym, String(amount));
+    DOC.settings = L.normalizeSettings(Object.assign({}, DOC.settings, { budgetWarnPct: Number(warnPct) }));
+    return true;
+  };
+
+  // ---------- insights (logic.js's stats) ----------
+  PP.insights = () => {
+    const st = L.stats(DOC);
+    const js = L.journalStats(DOC);
+    const buckets = L.responseBuckets(DOC);
+    const sp = L.spend(DOC);
+    const decided = st.accepted + st.rejected;
+    const timed = js.filter((r) => r.medianDays !== null).sort((a, b) => a.medianDays - b.medianDays);
+    const tmax = timed.length ? timed[timed.length - 1].medianDays || 1 : 1;
+    const answered = js.filter((r) => r.decided > 0).sort((a, b) => b.acceptRate - a.acceptRate || b.decided - a.decided);
+    const most = Math.max(0, ...buckets.map((b) => b.count));
+    return out({
+      empty: !decided && !js.length,
+      tiles: [
+        { value: decided ? st.accepted + ' of ' + decided : '–', label: 'Accepted, of those answered' },
+        { value: st.acceptRate === null ? '–' : Math.round(st.acceptRate * 100) + '%', label: 'Acceptance rate' },
+        { value: st.medianDays === null ? '–' : Math.round(st.medianDays) + ' days', label: 'Median reply' },
+        { value: money(sp.total), label: 'Fees paid in total' },
+      ],
+      timed: timed.map((r) => ({ label: r.name, sub: plural(r.waits, 'reply').replace('replys', 'replies'), frac: r.medianDays / tmax, text: Math.round(r.medianDays) + ' days' })),
+      answered: answered.map((r) => ({ label: r.name, sub: '', frac: r.acceptRate, text: r.accepted + ' of ' + r.decided })),
+      buckets: most ? buckets.map((b) => ({ label: b.label, sub: '', frac: b.count / most, text: String(b.count) })) : [],
+      counts: plural(st.sent, 'submission') + ': ' + st.pending + ' waiting, ' + st.accepted + ' accepted, ' + st.rejected + ' declined, ' + st.withdrawn + ' withdrawn.',
+    });
+  };
 
   // ---------- reminders on this iPhone ----------
   // Each reminder from logic.js's windowAlerts, on the first day it is due: that is when the notification fires.

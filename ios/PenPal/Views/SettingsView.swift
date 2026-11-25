@@ -23,6 +23,7 @@ struct SettingsView: View {
                     }
                 }
                 LabeledContent("Backups on this iPhone", value: "\(Local.backupCount)")
+                NavigationLink("Fee budget", value: BudgetRoute())
             } header: { ListHeader("Your data") } footer: {
                 ListFooter("Shared with your PCs through iCloud Drive. If two devices change things before iCloud catches up, Pen Pal asks which to keep. Backups are in the Files app, under Pen Pal.")
             }
@@ -84,6 +85,7 @@ struct SettingsView: View {
         .scrollContentBackground(.hidden)
         .background(P.bg)
         .navigationTitle("Settings")
+        .navigationDestination(for: BudgetRoute.self) { _ in BudgetView() }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { check = store.inspect(url) }
         }

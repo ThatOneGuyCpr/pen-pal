@@ -12,7 +12,7 @@ xcrun simctl install "$DEV" "$APP"
 DATA=$(xcrun simctl get_app_container "$DEV" "$BID" data)
 mkdir -p "$DATA/Documents/Demo"
 cp ../tests/fixtures/ios-demo.json "$DATA/Documents/Demo/tracker.json"
-for screen in desk journals journal:rm send:pl poems sent settings connect; do
+for screen in desk journals journal:rm send:pl poems sent settings connect budget insights editsub:s5; do
   name=$(echo "$screen" | tr ':' '-')
   SIMCTL_CHILD_PENPAL_FOLDER="$DATA/Documents/Demo" SIMCTL_CHILD_PENPAL_SCREEN="$screen" \
     xcrun simctl launch --terminate-running-process "$DEV" "$BID" >/dev/null

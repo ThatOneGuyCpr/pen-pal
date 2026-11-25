@@ -50,3 +50,18 @@ final class BridgeTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(b.run("buildsOn", out, "pc1")).toBool())
     }
 }
+
+@MainActor
+final class BridgeTests11: XCTestCase {
+    func testNewScreensDecode() throws {
+        let b = Bridge()
+        _ = b.json(Meta.self, "load", BridgeTests.doc)
+        let today = "2026-11-24"
+        XCTAssertNotNil(b.json(BudgetModel.self, "budget", "2026-11", today), b.lastError ?? "budget")
+        XCTAssertNotNil(b.json(Insights.self, "insights"), b.lastError ?? "insights")
+        let form = try XCTUnwrap(b.json(SubForm.self, "subForm", "s1"), b.lastError ?? "subForm")
+        XCTAssertEqual(form.poemIds, ["p2"])
+        XCTAssertNotNil(b.json(HistoryInfo.self, "history"), b.lastError ?? "history")
+        XCTAssertNotNil(b.json(SendForm.self, "sendForm", "pl", today, "s1"), b.lastError ?? "sendForm edit")
+    }
+}

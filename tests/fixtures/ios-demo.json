@@ -109,12 +109,59 @@
    ],
    "sentDate": "2026-07-01",
    "status": "pending"
+  },
+  {
+   "id": "s2",
+   "journalId": "po",
+   "poemIds": [
+    "p1",
+    "p2"
+   ],
+   "sentDate": "2026-03-02",
+   "status": "rejected",
+   "responseDate": "2026-05-20"
+  },
+  {
+   "id": "s3",
+   "journalId": "rm",
+   "poemIds": [
+    "p2"
+   ],
+   "sentDate": "2026-06-03",
+   "status": "rejected",
+   "responseDate": "2026-07-28"
+  },
+  {
+   "id": "s4",
+   "journalId": "rm",
+   "poemIds": [
+    "p4"
+   ],
+   "sentDate": "2026-09-04",
+   "status": "accepted",
+   "responseDate": "2026-10-30",
+   "acceptedPoemIds": [
+    "p4"
+   ]
+  },
+  {
+   "id": "s5",
+   "journalId": "po",
+   "poemIds": [
+    "p1"
+   ],
+   "sentDate": "2026-11-10",
+   "status": "pending",
+   "feePaid": 3
   }
  ],
  "manuscripts": [],
  "entries": [],
  "settings": {
   "theme": "dark",
-  "notifyDays": 3
+  "notifyDays": 3,
+  "monthlyBudget": {
+   "2026-09": 15
+  }
  }
 }

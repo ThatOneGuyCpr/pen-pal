@@ -173,3 +173,90 @@ test('poems: add titles in bulk, no duplicates, edit and remove', () => {
   PP.removePoem(id);
   assert.equal(J(PP.poem(id, TODAY)), null);
 });
+
+test('undo and redo through logic.js history, never touching the save chain', () => {
+  const PP = bridge();
+  PP.load(JSON.stringify(DOC));
+  assert.deepEqual(J(PP.history()), { undo: '', redo: '' });
+  PP.checkpoint('Turned off a bell');
+  PP.setNotify('pl', false);
+  PP.stamp(JSON.stringify(DOC), 'iPhone', '2026-11-24T10:00:00', 'ip1'); // saved in between
+  assert.deepEqual(J(PP.history()), { undo: 'Turned off a bell', redo: '' });
+  assert.deepEqual(J(PP.undo()), { label: 'Turned off a bell' });
+  const after = J(PP.json());
+  assert.equal(after.journals.find((j) => j.id === 'pl').notify, true);
+  assert.deepEqual([after.saveId, after.rev], ['ip1', 14]); // undo changed the data, not which save it is on
+  assert.deepEqual(J(PP.history()), { undo: '', redo: 'Turned off a bell' });
+  PP.redo();
+  assert.equal(J(PP.json()).journals.find((j) => j.id === 'pl').notify, false);
+  assert.equal(J(PP.undo()).label, 'Turned off a bell');
+  assert.equal(J(PP.undo()), null);
+  PP.checkpoint('x');
+  PP.load(JSON.stringify(DOC)); // another device's save arrives: history starts over
+  assert.deepEqual(J(PP.history()), { undo: '', redo: '' });
+});
+
+test('editing a submission: its own poems and fee are not counted against it', () => {
+  const PP = bridge();
+  PP.load(JSON.stringify(Object.assign({}, DOC, { settings: { monthlyBudget: { '2026-11': 10 } } })));
+  const r = J(PP.logSubmission(JSON.stringify({ journalId: 'pl', poemIds: ['p1'], sentDate: TODAY, feePaid: '8' })));
+  const f = J(PP.subForm(r.id));
+  assert.deepEqual([f.poemIds, f.feePaid, f.status], [['p1'], '8', 'pending']);
+  // the same fee again, as an edit: counted once ($8, the heads-up line), not twice ($16, over); no "already sent there"
+  assert.deepEqual(J(PP.sendCheck(JSON.stringify({ id: r.id, journalId: 'pl', poemIds: ['p1'], sentDate: TODAY, feePaid: '8' }), TODAY)).warn,
+    ['This fee would bring you to $8 of your $10 fee budget for November 2026.']);
+  assert.equal(J(PP.saveSub(JSON.stringify(Object.assign(f, { poemIds: [] })))).error, 'Pick at least one poem.');
+  assert.equal(J(PP.saveSub(JSON.stringify(Object.assign(f, { poemIds: ['p1', 'p2'], feePaid: '5', notes: 'via Submittable' })))).error, '');
+  const s = J(PP.json()).submissions.find((x) => x.id === r.id);
+  assert.deepEqual([s.poemIds, s.feePaid, s.notes], [['p1', 'p2'], 5, 'via Submittable']);
+  // an accepted poem stays selectable when editing the submission that took it
+  PP.setSubStatus(r.id, 'accepted', TODAY);
+  const form = J(PP.sendForm('pl', TODAY, r.id));
+  assert.equal(form.poems.find((p) => p.id === 'p1').blocked, false);
+  assert.equal(J(PP.sendForm('pl', TODAY)).poems.find((p) => p.id === 'p1').blocked, true);
+  const f2 = J(PP.subForm(r.id));
+  assert.equal(J(PP.saveSub(JSON.stringify(Object.assign(f2, { responseDate: '2026-01-01' })))).error, 'The answer is dated before the poems were sent.');
+  assert.equal(J(PP.saveSub(JSON.stringify(Object.assign(f2, { responseDate: '2026-11-30' })))).error, '');
+  assert.equal(J(PP.json()).submissions.find((x) => x.id === r.id).responseDate, '2026-11-30');
+});
+
+test('budget page: one month, its meter, the year chart, and setting it from a month on', () => {
+  const PP = bridge();
+  PP.load(JSON.stringify(DOC));
+  PP.logSubmission(JSON.stringify({ journalId: 'kw', poemIds: ['p1'], sentDate: '2026-11-10', feePaid: '6' }));
+  let b = J(PP.budget('2026-11', TODAY));
+  assert.deepEqual([b.name, b.spent, b.budget, b.left], ['November 2026', '$6', '', '']);
+  PP.setBudget('2026-11', '20');
+  b = J(PP.budget('2026-11', TODAY));
+  assert.deepEqual([b.budget, b.left, b.warnAt, b.over], ['$20', '$14 left', '$16', false]);
+  assert.equal(b.spentFrac, 0.3);
+  assert.match(b.applies, /^Applies from November 2026 on\./);
+  assert.equal(b.months.length, 12);
+  assert.deepEqual([b.months[10].text, b.months[10].cap, b.months[9].cap], ['$6', 1, null]);
+  assert.deepEqual(b.items.map((i) => [i.date, i.name, i.amount]), [['Nov 10', 'Kweli Journal', '$6']]);
+  assert.deepEqual([b.prev, b.next], ['2026-10', '2026-12']);
+  assert.match(J(PP.budget('2026-10', TODAY)).applies, /until the change you made for November 2026/);
+  PP.setBudget('2026-11', '');
+  assert.equal(J(PP.budget('2026-11', TODAY)).budget, '');
+  PP.saveBudget('2026-11', '25', 70);
+  b = J(PP.budget('2026-11', TODAY));
+  assert.deepEqual([b.budget, b.warnPct, b.warnAt], ['$25', 70, '$17.50']);
+});
+
+test('insights: the same figures as the Windows Insights page', () => {
+  const PP = bridge();
+  PP.load(JSON.stringify(DOC));
+  assert.equal(J(PP.insights()).tiles[0].value, '–');
+  PP.logSubmission(JSON.stringify({ journalId: 'rm', poemIds: ['p1'], sentDate: '2026-06-02' }));
+  PP.logSubmission(JSON.stringify({ journalId: 'rm', poemIds: ['p2'], sentDate: '2026-09-02', feePaid: '3' }));
+  const subs = J(PP.subs(TODAY)).pending.filter((s) => s.journal === 'Rust & Moth');
+  PP.setSubStatus(subs[0].id, 'rejected', '2026-07-12');
+  PP.setSubStatus(subs[1].id, 'accepted', '2026-10-02');
+  const i = J(PP.insights());
+  assert.equal(i.empty, false);
+  assert.deepEqual(i.tiles.map((t) => t.value), ['1 of 2', '50%', '35 days', '$3']);
+  assert.deepEqual(i.timed.map((r) => [r.label, r.text, r.sub]), [['Rust & Moth', '35 days', '2 replies']]);
+  assert.deepEqual(i.answered.map((r) => [r.label, r.text, r.frac]), [['Rust & Moth', '1 of 2', 0.5]]);
+  assert.deepEqual(i.buckets.filter((b) => b.text !== '0').map((b) => b.label), ['2 to 4 weeks', '1 to 2 months']); // 30 and 40 days
+  assert.match(i.counts, /^3 submissions: 1 waiting, 1 accepted, 1 declined, 0 withdrawn\.$/);
+});

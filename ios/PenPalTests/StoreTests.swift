@@ -79,6 +79,36 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("tracker 2.json").path))
     }
 
+    func testUndoIsSavedOnTopAndChangesNothingElse() throws {
+        let store = Store()
+        store.open(DataFolder(url: dir))
+        store.change("setNotify", "rm", false)
+        XCTAssertEqual(store.undoBar?.text, "Changed a reminder bell")
+        XCTAssertEqual(store.history?.undo, "Changed a reminder bell")
+        store.undo()
+        let doc = try file()
+        let rm = (doc["journals"] as? [[String: Any]])?.first { $0["id"] as? String == "rm" }
+        XCTAssertEqual(rm?["notify"] as? Bool, true)
+        XCTAssertEqual(doc["rev"] as? Int, 15)  // the undo is its own save, on top of the change
+        XCTAssertEqual(store.undoBar?.redo, true)
+        // a change that changes nothing is not saved and leaves nothing to undo
+        store.change("setNotify", "rm", true)
+        XCTAssertEqual(try file()["rev"] as? Int, 15)
+    }
+
+    func testEditingASubmission() throws {
+        let store = Store()
+        store.open(DataFolder(url: dir))
+        var form = try XCTUnwrap(store.subForm("s1"))
+        form.poemIds = ["p1", "p2"]
+        form.feePaid = "4"
+        let result = store.decode(SaveResult.self, store.change("saveSub", jsonText(form)))
+        XCTAssertEqual(result?.error, "")
+        let s1 = (try file()["submissions"] as? [[String: Any]])?.first { $0["id"] as? String == "s1" }
+        XCTAssertEqual(s1?["poemIds"] as? [String], ["p1", "p2"])
+        XCTAssertEqual(s1?["feePaid"] as? Double, 4)
+    }
+
     func testAMissingFileIsAProblemNotAFreshStart() throws {
         try FileManager.default.removeItem(at: dir.appendingPathComponent("tracker.json"))
         let store = Store()

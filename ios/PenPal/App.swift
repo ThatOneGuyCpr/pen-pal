@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UserNotifications
 
 @main
@@ -50,17 +51,20 @@ struct RootView: View {
 struct MainTabs: View {
     @Environment(Store.self) private var store
     @State private var tab = 0
+    @State private var deskPath = NavigationPath()
     @State private var journalsPath = NavigationPath()
+    @State private var sentPath = NavigationPath()
+    @State private var askUndo = false
 
     var body: some View {
         TabView(selection: $tab) {
-            NavigationStack { DeskView(tab: $tab) }
+            NavigationStack(path: $deskPath) { DeskView(tab: $tab) }
                 .tabItem { Label("Desk", systemImage: "tray") }.tag(0)
             NavigationStack(path: $journalsPath) { JournalsView() }
                 .tabItem { Label("Journals", systemImage: "book.closed") }.tag(1)
             NavigationStack { PoemsView() }
                 .tabItem { Label("Poems", systemImage: "pencil.line") }.tag(2)
-            NavigationStack { SentView() }
+            NavigationStack(path: $sentPath) { SentView() }
                 .tabItem { Label("Sent", systemImage: "envelope") }.tag(3)
             NavigationStack { SettingsView() }
                 .tabItem { Label("Settings", systemImage: "gearshape") }.tag(4)
@@ -68,7 +72,21 @@ struct MainTabs: View {
         .tint(P.blue)
         .safeAreaInset(edge: .top, spacing: 0) { SyncNotices() }
         .overlay(alignment: .top) { Stripe().ignoresSafeArea(edges: .top) }
+        .overlay(alignment: .bottom) { UndoBarView().padding(.bottom, 92) }
+        .onReceive(NotificationCenter.default.publisher(for: .penPalShake)) { _ in
+            if let h = store.history, !(h.undo.isEmpty && h.redo.isEmpty) { askUndo = true }
+        }
+        .alert(undoTitle, isPresented: $askUndo) {
+            if let h = store.history, !h.undo.isEmpty { Button("Undo") { store.undo() } }
+            if let h = store.history, !h.redo.isEmpty { Button("Redo") { store.redo() } }
+            Button("Cancel", role: .cancel) {}
+        }
         .onAppear(perform: demo)
+    }
+
+    private var undoTitle: String {
+        guard let h = store.history else { return "Undo" }
+        return h.undo.isEmpty ? "Redo: \(h.redo)" : "Undo: \(h.undo)"
     }
 
     /// For the build's screenshots: open a given screen.
@@ -77,7 +95,9 @@ struct MainTabs: View {
         if s == "journals" || s.hasPrefix("journal:") { tab = 1 }
         if s.hasPrefix("journal:") { journalsPath.append(JournalRoute(id: String(s.dropFirst(8)))) }
         if s == "poems" { tab = 2 }
-        if s == "sent" { tab = 3 }
+        if s == "sent" || s == "insights" || s.hasPrefix("editsub:") { tab = 3 }
+        if s == "insights" { sentPath.append(InsightsRoute()) }
+        if s == "budget" { deskPath.append(BudgetRoute()) }
         if s == "settings" { tab = 4 }
     }
 }
@@ -151,5 +171,40 @@ struct ProblemView: View {
         }
         .background(P.bg)
         .ignoresSafeArea(edges: .top)
+    }
+}
+
+/// The bar after a change: what happened, and Undo (or Redo after an undo). Shaking the phone also offers it.
+struct UndoBarView: View {
+    @Environment(Store.self) private var store
+
+    var body: some View {
+        if let bar = store.undoBar {
+            HStack(spacing: 12) {
+                Text(bar.text).font(F.sans(14.5)).lineLimit(2)
+                Spacer(minLength: 4)
+                Button(bar.redo ? "Redo" : "Undo") { bar.redo ? store.redo() : store.undo() }
+                    .font(F.sans(15, .bold))
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .padding(.leading, 18).padding(.trailing, 8)
+            .foregroundStyle(P.bg)
+            .background(P.ink, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 16)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(.snappy, value: bar)
+        }
+    }
+}
+
+extension Notification.Name {
+    static let penPalShake = Notification.Name("penPalShake")
+}
+
+/// Shake to undo, as across iOS.
+extension UIWindow {
+    open override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
+        if motion == .motionShake { NotificationCenter.default.post(name: .penPalShake, object: nil) }
+        super.motionEnded(motion, with: event)
     }
 }

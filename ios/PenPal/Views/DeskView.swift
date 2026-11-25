@@ -92,15 +92,19 @@ struct DeskView: View {
                         }
                     }
 
-                    HStack {
-                        Text(d.fees.label + ": ").foregroundStyle(P.muted) + Text(d.fees.spent).font(F.sans(13.5, .semibold))
-                        Spacer()
-                        if !d.fees.budget.isEmpty {
-                            Text(d.fees.left).foregroundStyle(d.fees.over ? P.red : P.muted)
+                    NavigationLink(value: BudgetRoute()) {
+                        HStack {
+                            Text(d.fees.label + ": ").foregroundStyle(P.muted) + Text(d.fees.spent).font(F.sans(13.5, .semibold)).foregroundStyle(P.ink)
+                            Spacer()
+                            Text(d.fees.budget.isEmpty ? "Set a monthly budget" : d.fees.left)
+                                .foregroundStyle(d.fees.over ? P.red : P.blue)
+                            Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(P.muted)
                         }
+                        .font(F.sans(13.5))
+                        .padding(.horizontal, 16).frame(minHeight: 48)
+                        .background(P.panel, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
-                    .font(F.sans(13.5))
-                    .padding(.horizontal, 4)
+                    .buttonStyle(.plain)
                 }
                 .padding(16)
             }
@@ -114,6 +118,7 @@ struct DeskView: View {
             }
         }
         .navigationDestination(for: JournalRoute.self) { r in JournalDetailView(id: r.id) }
+        .navigationDestination(for: BudgetRoute.self) { _ in BudgetView() }
         .sheet(item: $send) { t in SendSheet(journalId: t.id) }
         .onAppear {
             if store.demoScreen.hasPrefix("send:") { send = SendTarget(id: String(store.demoScreen.dropFirst(5))); store.demoScreen = "" }

@@ -34,6 +34,7 @@ final class Store {
     var lost: LostNotice?
     var conflicts: [ConflictNotice] = []
     var theme = "system"
+    var undoBar: UndoBar?
     var demoScreen = ProcessInfo.processInfo.environment["PENPAL_SCREEN"] ?? ""
 
     let bridge = Bridge()
@@ -199,22 +200,67 @@ final class Store {
         if copies != conflicts { conflicts = copies }
     }
 
+    /// What each change is called in the Undo bar.
+    private static let labels: [String: String] = [
+        "setNotify": "Changed a reminder bell", "logSubmission": "Logged a submission", "saveSub": "Edited a submission",
+        "setSubStatus": "Recorded an answer", "withdraw": "Marked a poem withdrawn", "markQueried": "Noted your follow-up",
+        "snooze": "Snoozed a follow-up", "saveJournal": "Saved a journal", "removeJournal": "Removed a journal",
+        "addFromDirectory": "Added a journal", "savePoem": "Saved a poem", "addTitles": "Added poems", "removePoem": "Removed a poem",
+        "removeSub": "Removed a submission", "setSetting": "Changed a setting", "saveBudget": "Changed the fee budget",
+    ]
+
     /// Change the document: catch up with the file first, apply the change in logic.js, then save.
+    /// A change that changes nothing is not saved and leaves nothing to undo.
     @discardableResult
     func change(_ name: String, _ args: Any...) -> String? {
         refresh()
+        let label = Store.labels[name] ?? "Changed something"
+        let before = bridge.raw("json")
+        bridge.run("checkpoint", label)
         guard let value = bridge.invoke(name, args) else {
-            banner = "That did not work: \(bridge.lastError ?? "unknown error")"
+            let error = bridge.lastError ?? "unknown error"
+            bridge.run("dropCheckpoint")
+            banner = "That did not work: \(error)"
             return nil
         }
         let text = value.isString ? value.toString() : nil
-        save(rereadFirst: true)
+        if bridge.raw("json") == before {
+            bridge.run("dropCheckpoint")
+            return text
+        }
+        if save(rereadFirst: true) { showUndo(UndoBar(text: label, redo: false)) }
         return text
     }
 
-    /// Write the document as a save on top of the file as it is now.
-    private func save(rereadFirst: Bool) {
-        guard let f = folder else { return }
+    var history: HistoryInfo? { _ = version; return bridge.json(HistoryInfo.self, "history") }
+
+    func undo() { step("undo") }
+    func redo() { step("redo") }
+
+    private func step(_ name: String) {
+        refresh()  // if another device saved meanwhile, history starts over and there is nothing to undo
+        guard let text = bridge.raw(name), text != "null", let result = decode(UndoResult.self, text) else {
+            undoBar = nil
+            return
+        }
+        if save(rereadFirst: true) {
+            showUndo(UndoBar(text: (name == "undo" ? "Undid: " : "Redid: ") + result.label, redo: name == "undo"))
+        }
+    }
+
+    private func showUndo(_ bar: UndoBar) {
+        undoBar = bar
+        let id = bar.id
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            if self.undoBar?.id == id { self.undoBar = nil }
+        }
+    }
+
+    /// Write the document as a save on top of the file as it is now. True when it was written.
+    @discardableResult
+    private func save(rereadFirst: Bool) -> Bool {
+        guard let f = folder else { return false }
         do {
             var baseText = "{}"
             if let current = try f.read(f.file), let text = String(data: current, encoding: .utf8) {
@@ -223,7 +269,7 @@ final class Store {
                     // Your PC saved in the moment between catching up and saving. Its version wins; say so.
                     try load(current)
                     banner = "Another device saved at the same moment, so that last change was not saved. Please make it again."
-                    return
+                    return false
                 }
                 baseText = text
             }
@@ -238,8 +284,10 @@ final class Store {
             theme = settings?.theme ?? theme
             version += 1
             afterChange()
+            return true
         } catch {
             banner = "Not saved: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -316,13 +364,24 @@ final class Store {
     func poem(_ id: String) -> PoemDetail? { _ = version; return bridge.json(PoemDetail.self, "poem", id, today) }
     var subs: Subs? { _ = version; return bridge.json(Subs.self, "subs", today) }
     var journalPicker: [PickJournal] { _ = version; return bridge.json([PickJournal].self, "journalPicker", today) ?? [] }
-    func sendForm(_ journalId: String) -> SendForm? { _ = version; return bridge.json(SendForm.self, "sendForm", journalId, today) }
+    func sendForm(_ journalId: String, subId: String = "") -> SendForm? { _ = version; return bridge.json(SendForm.self, "sendForm", journalId, today, subId) }
+    func subForm(_ id: String) -> SubForm? { bridge.json(SubForm.self, "subForm", id) }
+    func budget(_ ym: String) -> BudgetModel? { _ = version; return bridge.json(BudgetModel.self, "budget", ym, today) }
+    var insights: Insights? { _ = version; return bridge.json(Insights.self, "insights") }
     var blankJournal: JForm? { bridge.json(JForm.self, "blankJournal") }
     var plan: [PlanItem] { _ = version; return bridge.json([PlanItem].self, "reminderPlan", today, 60, "[]") ?? [] }
 
-    func sendCheck(journalId: String, poemIds: [String], sentDate: String, fee: String) -> SendCheck? {
-        struct Draft: Encodable { let journalId: String; let poemIds: [String]; let sentDate: String; let feePaid: String }
-        return bridge.json(SendCheck.self, "sendCheck", jsonText(Draft(journalId: journalId, poemIds: poemIds, sentDate: sentDate, feePaid: fee)), today)
+    func sendCheck(id: String = "", journalId: String, poemIds: [String], sentDate: String, fee: String) -> SendCheck? {
+        struct Draft: Encodable { let id: String; let journalId: String; let poemIds: [String]; let sentDate: String; let feePaid: String }
+        return bridge.json(SendCheck.self, "sendCheck", jsonText(Draft(id: id, journalId: journalId, poemIds: poemIds, sentDate: sentDate, feePaid: fee)), today)
+    }
+
+    static func date(_ ymd: String) -> Date? {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: ymd)
     }
 
     func decode<T: Decodable>(_ type: T.Type, _ text: String?) -> T? {

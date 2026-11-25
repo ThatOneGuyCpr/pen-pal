@@ -1,12 +1,8 @@
-Pen Pal for iPhone 1.0.1
+Pen Pal for iPhone 1.1.0
 
-The first iPhone version. It uses the same Pen Pal file as your PCs, through iCloud Drive.
+- Undo. After each change, an Undo button shows for a few seconds, and you can shake the iPhone to undo or redo, as elsewhere on iOS. If your PC's changes arrive in the meantime, there is nothing to undo, so an undo never brings back what the PC changed.
+- Edit a submission: open it in Sent and tap Edit to change the journal, poems, dates, fee or notes. The checks before you send don't count the submission against itself.
+- Fee budget: tap the fees line on the Desk (or Settings, Fee budget). One month at a time, with the year by month below; set or change the monthly budget there.
+- Insights: the chart button in Sent. Acceptance rate, how long each journal takes to answer, and acceptance by journal.
 
-- Desk, your journals (with reminder bells), each journal's reading periods, the journal directory, poems, and what you've sent.
-- Send poems with the same checks the Windows app runs before you send.
-- Reading period reminders as notifications on this iPhone.
-- Changes from your PCs show up on their own. If the iPhone and a PC both change things before iCloud catches up, Pen Pal asks which to keep.
-
-Install: download PenPal.ipa on your iPhone and open it in LiveContainer. In LiveContainer, long-press Pen Pal, Settings, and turn on Fix File Picker & Local Notification. Then pick the Pen Pal folder in iCloud Drive.
-
-Not in this version (use the Windows app): manuscripts and contests, import and export, insights, and setting the fee budget.
+Update: download PenPal.ipa and open it in LiveContainer. Your data is in iCloud and isn't touched. If Pen Pal asks for the folder again, pick the same Pen Pal folder.
