@@ -35,9 +35,11 @@ Or put `PenPal.exe` inside the old folder, next to its `data` folder. Pen Pal us
 
 ## Finding journals
 
-**Find journals** has a starter directory of 22 poetry journals, checked by hand on November 23, 2026 against each journal's own guidelines (a few details come from the publisher-supplied listings on Poets & Writers). Blank means not confirmed. Filter by open now, simultaneous submissions, no fee, pays, and reprints; one click adds a journal to yours with its reading windows already set to repeat each year.
+**Find journals** has a directory of 93 poetry journals, each checked by hand against its own guidelines or submission page (each entry shows the date). Blank means not confirmed. Focus tags (Black writers, the South, Florida, narrative, formal verse and so on) appear only where a journal says so itself. Filter by when it's open, fee, pay per poem, reply time, print or online, simultaneous submissions, reprints and focus; sort by closing date, reply time, pay or fee; save searches (they sync with your data). "For a poem" shows only journals that could take that poem. One click adds a journal with its reading windows set to repeat each year.
 
-For anything not in the directory, the buttons under the list open a search on Chill Subs or Poets & Writers. Add what you find with **Add one by hand**. The directory says when it was last checked; after six months it warns you that details may have changed. Always read a journal's guidelines before you send.
+The directory updates itself: Pen Pal checks GitHub for a newer list once a day, or when you press **Check for new journals**. Your own journals are never changed without asking; when the directory has newer details for one, Find journals shows yours and theirs side by side.
+
+For anything not in the directory, **Add from a link** reads a journal's guidelines page (or pasted text) and fills in the journal form for you to check. The buttons under the list open a search on Chill Subs or Poets & Writers. Always read a journal's guidelines before you send.
 
 ## Everyday use
 
@@ -125,5 +127,5 @@ Pen Pal needs to be able to write to the folder `PenPal.exe` sits in (your Deskt
 - **Pen Pal crashed or froze:** open the data folder (Settings, Your data) and look at `pen-pal-log.txt` (this run) and `pen-pal-log.prev.txt` (the run before). They hold start-up details and errors, never poem text. Send them along with a description of what happened.
 - **Reminders don't show up:** Settings, Reading period reminders, Send a test notification. If nothing appears, open Windows Settings, System, Notifications, and make sure Pen Pal is allowed (and Do not disturb is off). The daily check while Pen Pal is closed is a Task Scheduler task called "Pen Pal reminders"; it is removed when you turn the option off or ring off every bell. If you delete Pen Pal, turn reminders off first, or delete that task in Task Scheduler.
 - **The update says it can't install:** move `PenPal.exe` somewhere you can write to (Desktop, Documents), or download the new version from the releases page.
-- **You want Windows' snapping back:** Settings, Title bar, Standard Windows title bar, then reopen Pen Pal.
+- **You'd rather have Windows' own title bar:** Settings, Title bar, Standard Windows title bar, then reopen Pen Pal. (Since 2.5, Pen Pal's title bar snaps and resizes like any Windows window too.)
 - **The second folder says the last copy failed:** the drive may be unplugged or the folder renamed. Your data is still saved.

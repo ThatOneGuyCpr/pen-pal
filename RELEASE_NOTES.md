@@ -1,9 +1,8 @@
-Pen Pal 2.4.0
+Pen Pal 2.5.0
 
-- Keep your data in iCloud Drive (or OneDrive, Dropbox, Google Drive) and use Pen Pal on more than one computer. Settings, Your data, "Keep it in iCloud Drive or another synced folder". On the second computer, pick the same folder and choose "Use that data".
-- When your other computer saves, Pen Pal picks it up on its own.
-- If the cloud service ever keeps the other computer's version and drops changes made on this one, Pen Pal notices and offers to put them back. A second copy left in the folder by the cloud service is flagged too, and you choose which to keep. Nothing is deleted: whatever you don't keep goes to this PC's backups folder.
-- Settings, logs and daily backups stay on each computer. A reading period reminder shown on one computer isn't shown again on the other.
-- If the synced folder isn't available when Pen Pal starts (say iCloud isn't running yet), Pen Pal tells you instead of starting with an empty file.
-
-From 2.3.0: Settings, Check for updates.
+- A bigger directory: 93 poetry journals, each checked against its own guidelines or submission page, with the date it was checked. New: pay per poem, print or online, and what a journal says it especially wants (Black writers, writers of color, Latinx, Asian American, Indigenous, LGBTQ+, women, emerging writers, the South, Florida, narrative, experimental, formal verse, translation, nature, speculative).
+- The directory updates itself. Pen Pal looks for a newer list once a day (or use "Check for new journals" in Find journals). Journals you've already added keep your details; when the directory has newer ones, Find journals shows them side by side so you can take them or keep yours.
+- Filters in Find journals: open now, opening or closing within a number of days, a fee limit, a minimum pay per poem, reply time, print or online, and focus. Sort by closing date, fastest reply, highest pay, lowest fee or name. Save a search and reuse it here or on the iPhone.
+- Where can this poem go? On a poem (Poems, "Where can it go?"), Pen Pal lists journals, yours and the directory's, that are open now or opening within 30 days and haven't seen it. It leaves out ones that don't take simultaneous submissions while the poem is out, and flags fees that would go over your monthly budget. "For a poem" in Find journals does the same with every filter.
+- Add from a link: paste a journal's guidelines link (or the text) and Pen Pal fills in the journal form with what it finds, for you to check before saving.
+- The title bar now sits in a real Windows frame. Drag it to an edge to snap, double-click to maximize, right-click for the window menu, hover the maximize button for Snap layouts (Windows 11), resize from any edge, and maximizing stops at the taskbar.

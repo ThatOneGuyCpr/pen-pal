@@ -1,8 +1,8 @@
-Pen Pal for iPhone 1.1.0
+Pen Pal for iPhone 1.2.0
 
-- Undo. After each change, an Undo button shows for a few seconds, and you can shake the iPhone to undo or redo, as elsewhere on iOS. If your PC's changes arrive in the meantime, there is nothing to undo, so an undo never brings back what the PC changed.
-- Edit a submission: open it in Sent and tap Edit to change the journal, poems, dates, fee or notes. The checks before you send don't count the submission against itself.
-- Fee budget: tap the fees line on the Desk (or Settings, Fee budget). One month at a time, with the year by month below; set or change the monthly budget there.
-- Insights: the chart button in Sent. Acceptance rate, how long each journal takes to answer, and acceptance by journal.
+- A bigger directory: 93 poetry journals, checked against their own guidelines, with pay per poem, print or online, and what each says it especially wants. The list updates itself from GitHub once a day (Settings, Journal directory, Check now). Journals you've added keep your details unless you take the new ones.
+- Find journals has filters (the filter button), sorting, and saved searches, which are shared with your PCs. Tap a journal for its details, newer details for your copy, and Add or Send.
+- Where can it go? Open a poem to see journals that are open or opening soon and haven't seen it, with Send or Add and send.
+- Add from a link: in Find journals, the ... button. Paste a guidelines link or the text, and check the filled-in form before saving.
 
-Update: download PenPal.ipa and open it in LiveContainer. Your data is in iCloud and isn't touched. If Pen Pal asks for the folder again, pick the same Pen Pal folder.
+Update: download PenPal.ipa and open it in LiveContainer. Your data is in iCloud and isn't touched.
