@@ -1,0 +1,26 @@
+ok   page loaded
+     {"api": ["notify", "open_data_folder", "pick_folder", "save_file", "set_busy", "sync_reminders", "test_notification", "win_begin_move", "win_begin_resize", "win_bounds", "win_close", "win_is_max", "win_minimize", "win_mode", "win_set_bounds", "win_snap_layouts", "win_toggle_max"], "nav": 12, "titlebar": true, "mode": {"mode": "native", "appRegion": true, "snap": true, "error": ""}, "nativeClass": true, "drag": [0, 6, 890, 37], "dpr": 1, "b0": [156, 156, 1044, 788], "max1": true, "isMax": true, "b1": [-8, -8, 1040, 736], "max2": false, "b2": [80, 60, 1000, 700], "b3": [80, 60, 900, 620]}
+ok   bridge calls work
+ok   page sees the window controls
+ok   only methods are exposed to the page
+ok   app drew all twelve sections
+ok   Pen Pal's title bar is shown
+ok   maximize and restore
+ok   maximize moved or resized the window
+ok   resize to 1000x700
+ok   never smaller than 900x620
+ok   title bar sits in a real Windows frame ({'mode': 'native', 'appRegion': True, 'snap': True, 'error': ''})
+ok   WebView2 treats the title strip as the window's caption
+     geometry {"window": [80, 60, 980, 680], "client": [88, 60, 972, 672], "zoomed": false}
+ok   no Windows caption above the page
+ok   Windows' own resize frame on the sides and bottom
+ok   maximize the Windows way
+     maximized {"window": [-8, -8, 1032, 728], "client": [0, 0, 1024, 720], "zoomed": true}, work area [0, 0, 1024, 720]
+ok   maximized fills the area above the taskbar exactly
+ok   restore
+info drag from the title strip moved the window by (140, 70) (asked for (140, 70)): works
+info drag on the top edge: top 130 -> 80, height 651 -> 701
+ok   close waited for the save (1.5 s) and then closed
+ALL OK
+--- log ---
+2026-11-27 03:57:27 INFO penpal: title bar: native frame without a caption

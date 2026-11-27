@@ -1,0 +1,15 @@
+ok   page loaded
+     {"api": ["notify", "open_data_folder", "pick_folder", "save_file", "set_busy", "sync_reminders", "test_notification", "win_begin_move", "win_begin_resize", "win_bounds", "win_close", "win_is_max", "win_minimize", "win_mode", "win_set_bounds", "win_snap_layouts", "win_toggle_max"], "nav": 12, "titlebar": false, "mode": {"mode": "standard", "appRegion": false, "snap": false, "error": ""}, "nativeClass": false, "drag": [0, 0, 0, 0], "dpr": 1, "b0": [130, 130, 1044, 788], "max1": true, "isMax": true, "b1": [0, 0, 1024, 720], "max2": false, "b2": [80, 60, 1000, 700], "b3": [80, 60, 900, 620]}
+ok   bridge calls work
+ok   page sees the window controls
+ok   only methods are exposed to the page
+ok   app drew all twelve sections
+ok   Pen Pal's title bar is hidden
+ok   maximize and restore
+ok   maximize moved or resized the window
+ok   resize to 1000x700
+ok   never smaller than 900x620
+ok   Windows' own title bar
+ok   close waited for the save (1.3 s) and then closed
+ALL OK
+--- log ---
