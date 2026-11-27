@@ -272,19 +272,59 @@
   PP.setNotify = (id, on) => { const j = L.journalById(DOC, id); if (j) j.notify = !!on; return !!j; };
   PP.removeJournal = (id) => out(L.removeJournal(DOC, id));
 
-  // ---------- the directory that ships with the app ----------
-  PP.directory = (q, today) => {
-    const rows = L.searchDirectory(DIR, DOC, { q }, today);
-    return out({ checked: fmt(DIR.checked), total: DIR.journals.length, items: rows.map((r) => {
-      const st = r.state;
-      const line = st.kind === 'open' ? 'Open, closes ' + fmt(st.closes, today) : st.kind === 'soon' || st.kind === 'closed' ? 'Opens ' + fmt(st.opens, today)
-        : st.kind === 'always' ? 'Open all year' : 'Reading dates not known';
-      const chip = st.kind === 'open' ? left(st.daysLeft) : st.kind === 'soon' ? until(st.daysUntil) : '';
+  // ---------- the journal directory (ships with the app, and updates itself from GitHub) ----------
+  // The newer of the copy inside the app and one downloaded before.
+  PP.pickDirectory = (bundledJSON, downloadedJSON) => {
+    let dl = null;
+    try { dl = downloadedJSON ? JSON.parse(downloadedJSON) : null; } catch (e) { dl = null; }
+    const r = L.pickDirectory(JSON.parse(bundledJSON), dl);
+    DIR = r.dir;
+    return out({ source: r.source, total: DIR.journals.length, checked: fmt(DIR.checked), rev: DIR.rev });
+  };
+  // Is a downloaded directory newer than the one in use (and good enough to keep)?
+  PP.isNewerDirectory = (json) => {
+    let raw;
+    try { raw = JSON.parse(json); } catch (e) { return false; }
+    const b = L.loadDirectory(raw);
+    return b.journals.length > 0 && (b.rev > DIR.rev || (b.rev === DIR.rev && b.checked > DIR.checked));
+  };
+  const stateLine = (st, today) => st.kind === 'open' ? 'Open, closes ' + fmt(st.closes, today) : st.kind === 'soon' || st.kind === 'closed' ? (st.opens ? 'Opens ' + fmt(st.opens, today) : 'Closed')
+    : st.kind === 'always' ? 'Open all year' : 'Reading dates not known';
+  const stateChip = (st) => st.kind === 'open' ? left(st.daysLeft) : st.kind === 'soon' ? until(st.daysUntil) : '';
+  const stateTone = (st) => st.kind === 'open' && st.daysLeft <= 14 ? 'red' : st.kind === 'soon' ? 'blue' : 'gray';
+  const payLine = (e) => e.pays === 'yes' ? (e.paysNote ? 'Pays ' + e.paysNote : e.payPerPoem ? 'Pays $' + e.payPerPoem + ' a poem' : 'Pays') : '';
+  PP.directory = (q, today, optsJSON, poemId) => {
+    const o = optsJSON ? JSON.parse(optsJSON) : {};
+    const rows = L.searchDirectory(DIR, DOC, Object.assign({}, o, { q, poemId: poemId || '' }), today);
+    return out({ checked: fmt(DIR.checked), total: DIR.journals.length, filters: L.findFilterCount(o), items: rows.map((r) => {
       const e = r.entry;
-      const facts = [e.fee === 0 ? 'Free' : e.fee ? money(e.fee) + ' fee' : '', e.pays === 'yes' ? 'Pays' : '', e.simSubs === 'yes' ? 'Simultaneous OK' : ''].filter(Boolean).join(' · ');
-      return { dirId: e.id, name: e.name, line, chip, tone: st.kind === 'open' && st.daysLeft <= 14 ? 'red' : st.kind === 'soon' ? 'blue' : 'gray',
-        facts, note: e.note, mineId: r.mine ? r.mine.id : '', url: e.url };
+      const facts = [e.fee === 0 ? 'Free' : e.fee ? money(e.fee) + ' fee' : '', payLine(e), e.simSubs === 'yes' ? 'Simultaneous OK' : e.simSubs === 'no' ? 'No simultaneous' : '',
+        e.replyDays ? 'Replies in about ' + e.replyDays + ' days' : ''].filter(Boolean).join(' · ');
+      return { dirId: e.id, name: e.name, line: stateLine(r.state, today), chip: stateChip(r.state), tone: stateTone(r.state),
+        facts, note: e.note, mineId: r.mine ? r.mine.id : '', url: e.url, focus: e.focus.map(L.focusLabel),
+        changed: r.mine ? L.dirChanges(r.mine, e).length > 0 : false };
     }) });
+  };
+  PP.dirEntry = (dirId, today) => {
+    const e = DIR.journals.find((x) => x.id === dirId);
+    if (!e) return out(null);
+    const r = L.searchDirectory({ journals: [e] }, DOC, { when: 'any' }, today)[0];
+    const yn = { yes: 'Yes', no: 'No', unknown: 'Not confirmed' };
+    const facts = [
+      ['Reading period', e.yearRound ? 'Open all year' : e.windows.length ? L.windowsText(e.windows) + ', every year' : 'Changes; check their site'],
+      ['Fee', (e.fee === null ? 'Not confirmed' : e.fee === 0 ? 'Free' : money(e.fee)) + (e.feeNote ? '. ' + e.feeNote : '')],
+      ['Poems at a time', e.maxPoems ? 'Up to ' + e.maxPoems : 'Not stated'],
+      ['Simultaneous', yn[e.simSubs]],
+      ['Pays', e.pays === 'yes' ? (e.paysNote || (e.payPerPoem ? '$' + e.payPerPoem + ' a poem' : 'Yes')) : e.pays === 'no' ? (e.paysNote || 'No') : 'Not confirmed'],
+      ['Reprints', yn[e.reprints]],
+      ['Usual reply', e.replyDays ? 'About ' + e.replyDays + ' days' : 'Not stated'],
+      ['Print or online', e.format.map((f) => (f === 'print' ? 'Print' : 'Online')).join(' and ') || 'Not stated'],
+    ].map(([label, value]) => ({ label, value }));
+    const sent = r.mine ? DOC.submissions.filter((s) => s.journalId === r.mine.id).length : 0;
+    return out({ dirId: e.id, name: e.name, url: e.url, note: e.note, line: stateLine(r.state, today), chip: stateChip(r.state), tone: stateTone(r.state),
+      focus: e.focus.map(L.focusLabel), tags: e.tags, facts, mineId: r.mine ? r.mine.id : '', checked: fmt(e.checked),
+      history: r.mine ? (sent ? 'Sent here ' + plural(sent, 'time') + '.' : 'Nothing sent here yet.') : '',
+      changes: r.mine ? L.dirChanges(r.mine, e).map((c) => ({ label: c.label, mine: c.mine, theirs: c.theirs })) : [] });
   };
   PP.addFromDirectory = (dirId, today) => {
     const e = DIR.journals.find((x) => x.id === dirId);
@@ -292,6 +332,47 @@
     const j = L.dirToJournal(e, today, DIR.checked);
     DOC.journals.push(j);
     return j.id;
+  };
+  const mineFor = (dirId, today) => {
+    const e = DIR.journals.find((x) => x.id === dirId);
+    const r = e && L.searchDirectory({ journals: [e] }, DOC, { when: 'any' }, today)[0];
+    return r && r.mine ? { e, j: r.mine } : null;
+  };
+  PP.takeDirChanges = (dirId, today) => { const m = mineFor(dirId, today); return !!m && L.applyDirChanges(DOC, m.j.id, m.e, today); };
+  PP.keepDirChanges = (dirId, today) => { const m = mineFor(dirId, today); if (m) L.dismissDirChanges(DOC, m.j.id, m.e); return !!m; };
+
+  // Search choices, saved searches and the poems you can search for.
+  PP.findMeta = () => out({
+    when: L.FIND_WHEN.map((k) => ({ key: k, label: { any: 'Any time', open: 'Open now', soon: 'Open or opening soon', closing: 'Closing soon' }[k] })),
+    sorts: L.FIND_SORTS.map((k) => ({ key: k, label: { smart: 'Best order', closing: 'Closing soonest', reply: 'Fastest reply', pay: 'Highest pay', fee: 'Lowest fee', name: 'A to Z' }[k] })),
+    focus: L.FOCUS.map(([k, label]) => ({ key: k, label })),
+    saved: L.normalizeSettings(DOC.settings).savedFinds.map((f) => ({ id: f.id, name: f.name, opts: f.opts })),
+    poems: DOC.poems.filter((p) => ['ready', 'out'].includes(L.poemState(DOC, p))).sort((a, b) => a.title.localeCompare(b.title)).map((p) => ({ id: p.id, title: p.title })),
+  });
+  PP.findOpts = (json) => out(L.normalizeFindOpts(json ? JSON.parse(json) : { when: 'soon' }));
+  PP.saveFind = (name, optsJSON) => { const f = L.saveFind(DOC, name, JSON.parse(optsJSON)); return f ? f.id : ''; };
+  PP.removeFind = (id) => { L.removeFind(DOC, id); return true; };
+
+  // Where can this poem go? Your journals and the directory, open now or within 30 days, not seen it.
+  PP.poemMatches = (poemId, today) => {
+    const m = L.poemMatches(DOC, DIR, poemId, today);
+    const when = (st) => st.kind === 'always' ? 'Open all year' : st.kind === 'open' ? (st.daysLeft === 0 ? 'Closes today' : 'Closes in ' + plural(st.daysLeft, 'day')) : 'Opens in ' + plural(st.daysUntil, 'day');
+    const hid = [m.hidden.seen ? plural(m.hidden.seen, 'journal') + ' already saw it' : '', m.hidden.noSim ? m.hidden.noSim + ' take no simultaneous submissions while it is out' : ''].filter(Boolean);
+    return out({ placed: m.placed, left: hid.length ? 'Left out: ' + hid.join('; ') + '.' : '', items: m.items.map((c) => ({
+      key: c.key, name: c.name, line: when(c.state) + ' · ' + (c.fee === null ? 'Fee not confirmed' : c.fee === 0 ? 'Free' : money(c.fee) + ' fee'),
+      notes: c.notes.filter((n) => n !== 'Fee not confirmed.').join(' '), mineId: c.mine ? c.mine.id : '', dirId: c.mine ? '' : c.entry.id, canSend: c.state.kind !== 'soon',
+    })) });
+  };
+
+  // Quick add: a journal form filled in from a guidelines page (html) or pasted text.
+  PP.guidelinesForm = (body, isHTML, url, today) => {
+    const page = isHTML ? L.htmlToText(body) : { title: '', text: String(body || '') };
+    const g = L.parseGuidelines(page.text, page.title);
+    const j = L.journalFromGuidelines(g, L.cleanUrl(url), today);
+    return out({ found: g.found.length ? 'Found: ' + g.found.join(', ') + '. Check each one against the page before you save.' : 'Pen Pal could not find the details on that page, so fill them in from the guidelines.',
+      form: { id: '', name: j.name === 'New journal' ? '' : j.name, url: j.url, opens: j.opens, closes: j.closes, yearly: j.repeat === 'yearly', always: j.alwaysOpen, notify: false,
+        replyDays: j.replyDays === null ? '' : String(j.replyDays), pays: j.pays, reprints: j.reprints, fee: j.fee === null ? '' : String(j.fee),
+        maxPoems: j.maxPoems === null ? '' : String(j.maxPoems), simSubs: j.simSubs, notes: j.notes, extra: L.windowsText(j.extraWindows) } });
   };
 
   // ---------- poems ----------

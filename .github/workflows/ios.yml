@@ -58,7 +58,7 @@ jobs:
           bash scripts/screenshots.sh "$UDID" build/sim/Build/Products/Debug-iphonesimulator/PenPal.app
 
       - name: Keep the screenshots on the ci-screens branch (for review)
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request'
         run: |
           cd ios/screens
           git init -q -b ci-screens

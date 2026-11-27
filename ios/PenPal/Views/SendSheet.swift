@@ -15,10 +15,10 @@ struct SendSheet: View {
     @State private var error = ""
     @State private var feeLoaded: Bool
 
-    init(journalId: String, editing: SubForm? = nil) {
+    init(journalId: String, editing: SubForm? = nil, poemId: String? = nil) {
         self.editing = editing
         _journalId = State(initialValue: editing?.journalId ?? journalId)
-        _picked = State(initialValue: editing?.poemIds ?? [])
+        _picked = State(initialValue: editing?.poemIds ?? (poemId.map { [$0] } ?? []))
         _sent = State(initialValue: editing.flatMap { Store.date($0.sentDate) } ?? Date())
         _fee = State(initialValue: editing?.feePaid ?? "")
         _notes = State(initialValue: editing?.notes ?? "")

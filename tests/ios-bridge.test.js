@@ -260,3 +260,78 @@ test('insights: the same figures as the Windows Insights page', () => {
   assert.deepEqual(i.buckets.filter((b) => b.text !== '0').map((b) => b.label), ['2 to 4 weeks', '1 to 2 months']); // 30 and 40 days
   assert.match(i.counts, /^3 submissions: 1 waiting, 1 accepted, 1 declined, 0 withdrawn\.$/);
 });
+
+// ---------- 2.5 ----------
+const TINY = { rev: 1, checked: '2026-11-01', journals: [
+  { id: 'a', name: 'Alpha', url: 'https://a.example', windows: [['11-01', '12-31']], fee: 0, simSubs: 'yes', pays: 'yes', payPerPoem: 40, replyDays: 45, format: ['online'], focus: ['black', 'florida'], note: 'A.' },
+  { id: 'b', name: 'Bravo', url: 'https://b.example', yearRound: true, fee: 3, simSubs: 'no', pays: 'no', note: 'B.' },
+] };
+
+test('directory: the newer copy wins, and a bad download never replaces it', () => {
+  const PP = bridge();
+  const bundled = JSON.stringify(TINY);
+  assert.equal(J(PP.pickDirectory(bundled, '')).source, 'app');
+  assert.equal(J(PP.pickDirectory(bundled, 'not json')).source, 'app');
+  const newer = JSON.stringify(Object.assign({}, TINY, { rev: 2, journals: TINY.journals.concat({ id: 'c', name: 'Charlie', note: 'C.' }) }));
+  const r = J(PP.pickDirectory(bundled, newer));
+  assert.equal(r.source, 'update');
+  assert.equal(r.total, 3);
+  assert.equal(PP.isNewerDirectory(newer), false, 'already using it');
+  assert.equal(PP.isNewerDirectory(JSON.stringify(Object.assign({}, TINY, { rev: 3 }))), true);
+  assert.equal(PP.isNewerDirectory('{"rev": 9, "journals": []}'), false);
+});
+
+test('directory: filters, saved searches, detail and newer details', () => {
+  const PP = bridge();
+  PP.pickDirectory(JSON.stringify(TINY), '');
+  PP.fresh();
+  assert.deepEqual(J(PP.directory('', TODAY, JSON.stringify({ focus: ['florida'] }))).items.map((i) => i.name), ['Alpha']);
+  const d = J(PP.directory('', TODAY, JSON.stringify({ maxFee: 0, when: 'open' })));
+  assert.deepEqual(d.items.map((i) => i.name), ['Alpha']);
+  assert.equal(d.filters, 2);
+  assert.ok(d.items[0].facts.includes('Pays $40 a poem'));
+  assert.deepEqual(d.items[0].focus, ['Black writers', 'Florida']);
+  const meta = J(PP.findMeta());
+  assert.equal(meta.focus.length, 16);
+  assert.equal(meta.saved.length, 0);
+  assert.ok(PP.saveFind('Free and open', JSON.stringify({ maxFee: 0, when: 'open' })));
+  assert.equal(J(PP.findMeta()).saved[0].opts.maxFee, 0);
+  assert.equal(J(PP.json()).settings.savedFinds.length, 1, 'saved with the data, so the PCs see it');
+  PP.removeFind(J(PP.findMeta()).saved[0].id);
+  assert.equal(J(PP.findMeta()).saved.length, 0);
+  assert.equal(J(PP.findOpts('')).when, 'soon');
+  // detail and newer details
+  const id = PP.addFromDirectory('a', TODAY);
+  let e = J(PP.dirEntry('a', TODAY));
+  assert.equal(e.mineId, id);
+  assert.equal(e.changes.length, 0);
+  assert.equal(e.facts.find((f) => f.label === 'Print or online').value, 'Online');
+  PP.pickDirectory(JSON.stringify(TINY), JSON.stringify(Object.assign({}, TINY, { rev: 2, journals: [Object.assign({}, TINY.journals[0], { fee: 2, checked: '2026-11-20' })] })));
+  e = J(PP.dirEntry('a', TODAY));
+  assert.deepEqual(e.changes, [{ label: 'Fee', mine: 'Free', theirs: '$2' }]);
+  assert.equal(J(PP.directory('alpha', TODAY)).items[0].changed, true);
+  PP.keepDirChanges('a', TODAY);
+  assert.equal(J(PP.dirEntry('a', TODAY)).changes.length, 0);
+});
+
+test('where can this poem go, and quick add', () => {
+  const PP = bridge();
+  PP.pickDirectory(JSON.stringify(TINY), '');
+  PP.load(JSON.stringify(DOC));
+  const m = J(PP.poemMatches('p1', TODAY));
+  assert.equal(m.placed, false);
+  assert.ok(m.items.some((i) => i.name === 'Alpha' && i.dirId === 'a' && i.canSend));
+  assert.ok(m.items.some((i) => i.name === 'Poet Lore' && i.mineId === 'pl'));
+  const q = J(PP.guidelinesForm('<title>Guidelines | Moon Review</title><p>We read from March 1 to May 31.</p><p>Send up to three poems. No fee.</p>', true, 'moon.example/submit', TODAY));
+  assert.equal(q.form.name, 'Moon Review');
+  assert.equal(q.form.url, 'https://moon.example/submit');
+  assert.equal(q.form.maxPoems, '3');
+  assert.equal(q.form.fee, '0');
+  assert.equal(q.form.yearly, true);
+  assert.ok(q.found.startsWith('Found: reading period'));
+  const saved = J(PP.saveJournal(JSON.stringify(q.form)));
+  assert.equal(saved.error, '');
+  const nothing = J(PP.guidelinesForm('hello', false, '', TODAY));
+  assert.equal(nothing.form.name, '');
+  assert.ok(nothing.found.includes('could not find'));
+});

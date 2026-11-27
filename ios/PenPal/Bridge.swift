@@ -7,6 +7,8 @@ import JavaScriptCore
 final class Bridge {
     private let context: JSContext
     private(set) var lastError: String?
+    /// The journal directory inside the app (a newer one may have been downloaded since).
+    private(set) var bundledDirectory = "{}"
 
     init(bundle: Bundle = .main) {
         context = JSContext()!
@@ -23,6 +25,7 @@ final class Bridge {
         }
         if let url = bundle.url(forResource: "directory", withExtension: "json"),
            let source = try? String(contentsOf: url, encoding: .utf8) {
+            bundledDirectory = source
             invoke("loadDirectory", [source])
         }
     }

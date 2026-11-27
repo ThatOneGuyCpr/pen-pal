@@ -146,6 +146,7 @@ struct SaveResult: Decodable {
 struct DirList: Decodable {
     var checked: String
     var total: Int
+    var filters: Int
     var items: [DirRow]
 }
 
@@ -159,8 +160,112 @@ struct DirRow: Decodable, Identifiable {
     var note: String
     var mineId: String
     var url: String
+    var focus: [String]
+    var changed: Bool
     var id: String { dirId }
 }
+
+struct DirFact: Decodable, Identifiable {
+    var label: String
+    var value: String
+    var id: String { label }
+}
+
+struct DirChange: Decodable, Identifiable {
+    var label: String
+    var mine: String
+    var theirs: String
+    var id: String { label }
+}
+
+struct DirEntry: Decodable {
+    var dirId: String
+    var name: String
+    var url: String
+    var note: String
+    var line: String
+    var chip: String
+    var tone: String
+    var focus: [String]
+    var tags: [String]
+    var facts: [DirFact]
+    var mineId: String
+    var checked: String
+    var history: String
+    var changes: [DirChange]
+}
+
+/// Search choices for Find journals (logic.js's normalizeFindOpts).
+struct FindOpts: Codable, Equatable {
+    var q: String = ""
+    var when: String = "soon"
+    var within: Int = 30
+    var maxFee: Double?
+    var sim = false
+    var pays = false
+    var reprints = false
+    var notSent = false
+    var payMin: Double?
+    var maxReply: Int?
+    var format = ""
+    var focus: [String] = []
+    var sort = "smart"
+}
+
+struct KeyLabel: Decodable, Identifiable, Hashable {
+    var key: String
+    var label: String
+    var id: String { key }
+}
+
+struct SavedFind: Decodable, Identifiable {
+    var id: String
+    var name: String
+    var opts: FindOpts
+}
+
+struct PoemChoice: Decodable, Identifiable, Hashable {
+    var id: String
+    var title: String
+}
+
+struct FindMeta: Decodable {
+    var when: [KeyLabel]
+    var sorts: [KeyLabel]
+    var focus: [KeyLabel]
+    var saved: [SavedFind]
+    var poems: [PoemChoice]
+}
+
+struct MatchItem: Decodable, Identifiable {
+    var key: String
+    var name: String
+    var line: String
+    var notes: String
+    var mineId: String
+    var dirId: String
+    var canSend: Bool
+    var id: String { key }
+}
+
+struct MatchList: Decodable {
+    var placed: Bool
+    var left: String
+    var items: [MatchItem]
+}
+
+struct QuickForm: Decodable {
+    var found: String
+    var form: JForm
+}
+
+struct DirInfo: Decodable {
+    var source: String
+    var total: Int
+    var checked: String
+}
+
+struct DirRoute: Hashable { let id: String; var poemId = "" }
 
 struct PoemRow: Decodable, Identifiable {
     var id: String

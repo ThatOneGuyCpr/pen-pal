@@ -1436,6 +1436,26 @@
     }
     return out;
   }
+  // A web page as plain text (the iPhone reads guidelines pages itself; the desktop's server does this in Python).
+  const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '\u2013', mdash: '\u2014', rsquo: '\u2019', lsquo: '\u2018', rdquo: '\u201d', ldquo: '\u201c', hellip: '\u2026' };
+  function htmlToText(html) {
+    const raw = String(html || '').slice(0, 3000000);
+    const title = ((raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '');
+    const decode = (t) => t.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+      if (e[0] === '#') { const n = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : ''; }
+      return ENTITIES[e.toLowerCase()] !== undefined ? ENTITIES[e.toLowerCase()] : m;
+    });
+    const text = raw
+      .replace(/<head[\s\S]*?<\/head>/i, ' ')
+      .replace(/<(script|style|noscript|svg|template)\b[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<\/?(p|div|li|br|tr|h[1-6]|section|article|td|dd|dt)\b[^>]*>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ');
+    return {
+      title: decode(title).replace(/\s+/g, ' ').trim(),
+      text: decode(text).replace(/[ \t\r\f\v]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim().slice(0, 200000),
+    };
+  }
   // Fill a journal from what parseGuidelines found (for the journal form, before you save).
   function journalFromGuidelines(g, url, today) {
     const e = normalizeDirEntry({ id: 'x', name: g.name || 'New journal', url, windows: g.windows.map((w) => [w.opens, w.closes]), yearRound: g.yearRound,
@@ -1768,7 +1788,7 @@
     suggestedCredit, rightsReminders,
     normalizeDirEntry, loadDirectory, pickDirectory, dirToJournal, dirState, journalState, searchDirectory, dirIsStale, searchLinks,
     FOCUS, FIND_WHEN, FIND_SORTS, fitsPoem, focusLabel, normalizeFindOpts, findFilterCount, saveFind, removeFind,
-    poemMatches, dirChanges, applyDirChanges, dismissDirChanges, parseGuidelines, journalFromGuidelines,
+    poemMatches, dirChanges, applyDirChanges, dismissDirChanges, parseGuidelines, journalFromGuidelines, htmlToText,
     guessSubMapping, guessImportKind, parseSubStatus, splitTitles, buildSubImport, applySubImport,
     entriesFor, isActiveEntry, manuscriptState, manuscriptSummary, manuscriptWarnings, checkEntry, entryAlerts, setEntryStatus, removeManuscript,
     poemOutcome, poemHistory, nextTargets,

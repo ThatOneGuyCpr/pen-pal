@@ -1313,3 +1313,14 @@ test('the directory can be narrowed to journals that could take one poem', () =>
   assert.deepEqual(ids({ poemId: 'p1' }), ['c', 'd'], 'Alpha saw it, Bravo takes no simultaneous submissions while it is out');
   assert.deepEqual(ids({ poemId: 'nope' }), []);
 });
+
+test('a guidelines page as plain text (for the iPhone)', () => {
+  const r = L.htmlToText('<html><head><title>Submit &amp; Read | Gulf</title><style>p{}</style></head><body><script>var fee="$99 fee"</script>' +
+    '<p>Reading period: Sept&nbsp;1 &ndash; Nov 30.</p><!-- $5 fee --><div>No fee. It&#8217;s free &#x2014; really.</div></body></html>');
+  assert.equal(r.title, 'Submit & Read | Gulf');
+  assert.ok(r.text.includes('Reading period: Sept 1 – Nov 30.'));
+  assert.ok(r.text.includes('It’s free — really.'));
+  assert.ok(!r.text.includes('$99') && !r.text.includes('$5'));
+  assert.equal(L.parseGuidelines(r.text, r.title).fee, 0);
+  assert.deepEqual(L.htmlToText(''), { title: '', text: '' });
+});

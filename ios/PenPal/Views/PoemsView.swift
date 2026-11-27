@@ -112,6 +112,7 @@ struct PoemDetailView: View {
                         }
                     }
                 }
+                PoemMatchesSection(poemId: id)
                 if !error.isEmpty { Section { Text(error).foregroundStyle(P.red) } }
                 Section {
                     Button("Remove this poem", role: .destructive) { confirmDelete = true }

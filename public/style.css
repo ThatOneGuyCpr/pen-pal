@@ -420,6 +420,7 @@ table.mini thead th { border-top: 0; color: var(--muted); font-weight: 600; font
 
 /* ---------- the title bar inside a real Windows frame (2.5): Windows drags, snaps and maximizes ---------- */
 body.nativeframe .tb-drag { app-region: drag; -webkit-app-region: drag; }
-body.nativeframe .tb-btn, body.nativeframe #resizers { app-region: no-drag; -webkit-app-region: no-drag; }
-body.nativeframe #resizers > div:not([data-edge="n"]):not([data-edge="nw"]):not([data-edge="ne"]) { display: none; }
-body.nativeframe #resizers [data-edge="n"] { height: 4px; }
+body.nativeframe .tb-btn { app-region: no-drag; -webkit-app-region: no-drag; }
+/* The top edge is part of the caption strip, so Windows asks the window itself, which answers "top border". */
+body.nativeframe #resizers > div:not([data-edge="n"]) { display: none; }
+body.nativeframe #resizers [data-edge="n"] { left: 0; right: 0; height: 6px; cursor: default; app-region: drag; -webkit-app-region: drag; }

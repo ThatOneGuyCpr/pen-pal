@@ -74,9 +74,82 @@ final class Store {
     // MARK: - opening
 
     func start() {
+        loadDirectory()
         if demoScreen == "connect" { phase = .needsFolder; return }
         guard let url = FolderAccess.restore() else { phase = .needsFolder; return }
         open(DataFolder(url: url))
+        if demoScreen.isEmpty { checkDirectory(force: false) }
+    }
+
+    // MARK: - the journal directory: the copy in the app, or a newer one from GitHub
+
+    static let directoryURL = URL(string: "https://raw.githubusercontent.com/ThatOneGuyCpr/pen-pal/main/public/directory.json")!
+    var directoryInfo: DirInfo?
+    var directoryChecking = false
+    var directoryMessage = ""
+    var directoryLastCheck: Date? {
+        get { UserDefaults.standard.object(forKey: "directoryCheckedAt") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "directoryCheckedAt") }
+    }
+
+    func loadDirectory() {
+        let downloaded = (try? String(contentsOf: Local.directoryUpdate, encoding: .utf8)) ?? ""
+        directoryInfo = bridge.json(DirInfo.self, "pickDirectory", bridge.bundledDirectory, downloaded)
+        version += 1
+    }
+
+    /// Look for a newer directory: at most every 20 hours, unless you ask.
+    func checkDirectory(force: Bool) {
+        if directoryChecking { return }
+        if !force, let last = directoryLastCheck, Date().timeIntervalSince(last) < 20 * 3600 { return }
+        directoryChecking = true
+        directoryMessage = ""
+        Task { @MainActor in
+            defer { self.directoryChecking = false }
+            do {
+                var req = URLRequest(url: Store.directoryURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+                req.setValue("PenPal-iPhone", forHTTPHeaderField: "User-Agent")
+                let (data, response) = try await URLSession.shared.data(for: req)
+                guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 4_000_000, let text = String(data: data, encoding: .utf8) else {
+                    throw StoreError(message: "GitHub did not send the list.")
+                }
+                self.directoryLastCheck = Date()
+                if self.bridge.run("isNewerDirectory", text)?.toBool() == true {
+                    try data.write(to: Local.directoryUpdate, options: .atomic)
+                    let before = self.directoryInfo?.total ?? 0
+                    self.loadDirectory()
+                    let now = self.directoryInfo?.total ?? 0
+                    self.directoryMessage = "Updated: \(now) journals" + (now > before ? ", \(now - before) new." : ".")
+                } else if force {
+                    self.directoryMessage = "You already have the newest list."
+                }
+            } catch {
+                if force { self.directoryMessage = "Could not check: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    /// Quick add: read a journal's guidelines page and fill in a journal form.
+    func readGuidelines(_ raw: String) async throws -> QuickForm {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.contains("://") { text = "https://" + text }
+        guard let url = URL(string: text), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http", url.host != nil else {
+            throw StoreError(message: "That does not look like a web address.")
+        }
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        req.setValue("Mozilla/5.0 (iPhone) PenPal", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 { throw StoreError(message: "The site answered with an error (\(http.statusCode)).") }
+        let body = String(data: data.prefix(3_000_000), encoding: .utf8) ?? String(decoding: data.prefix(3_000_000), as: UTF8.self)
+        let isHTML = !((response.mimeType ?? "").contains("plain"))
+        guard let form = bridge.json(QuickForm.self, "guidelinesForm", body, isHTML, response.url?.absoluteString ?? text, today) else {
+            throw StoreError(message: "Could not read that page.")
+        }
+        return form
+    }
+
+    func guidelinesForm(pasted: String, url: String) -> QuickForm? {
+        bridge.json(QuickForm.self, "guidelinesForm", pasted, false, url, today)
     }
 
     /// Look at a folder before using it (the first-run screen and Settings use this).
@@ -207,6 +280,7 @@ final class Store {
         "snooze": "Snoozed a follow-up", "saveJournal": "Saved a journal", "removeJournal": "Removed a journal",
         "addFromDirectory": "Added a journal", "savePoem": "Saved a poem", "addTitles": "Added poems", "removePoem": "Removed a poem",
         "removeSub": "Removed a submission", "setSetting": "Changed a setting", "saveBudget": "Changed the fee budget",
+        "saveFind": "Saved a search", "removeFind": "Removed a saved search", "takeDirChanges": "Took the directory's details", "keepDirChanges": "Kept your details",
     ]
 
     /// Change the document: catch up with the file first, apply the change in logic.js, then save.
@@ -359,7 +433,14 @@ final class Store {
     var desk: Desk? { _ = version; return bridge.json(Desk.self, "desk", today) }
     func journals(filter: String, query: String) -> JournalList? { _ = version; return bridge.json(JournalList.self, "journals", today, filter, query) }
     func journal(_ id: String) -> JDetail? { _ = version; return bridge.json(JDetail.self, "journal", id, today) }
-    func directory(_ query: String) -> DirList? { _ = version; return bridge.json(DirList.self, "directory", query, today) }
+    func directory(_ query: String, opts: FindOpts? = nil, poemId: String = "") -> DirList? {
+        _ = version
+        return bridge.json(DirList.self, "directory", query, today, opts.map { jsonText($0) } ?? "", poemId)
+    }
+    func dirEntry(_ id: String) -> DirEntry? { _ = version; return bridge.json(DirEntry.self, "dirEntry", id, today) }
+    var findMeta: FindMeta? { _ = version; return bridge.json(FindMeta.self, "findMeta") }
+    var defaultFind: FindOpts { bridge.json(FindOpts.self, "findOpts", "") ?? FindOpts() }
+    func poemMatches(_ id: String) -> MatchList? { _ = version; return bridge.json(MatchList.self, "poemMatches", id, today) }
     func poems(_ query: String) -> [PoemRow] { _ = version; return bridge.json([PoemRow].self, "poems", query, today) ?? [] }
     func poem(_ id: String) -> PoemDetail? { _ = version; return bridge.json(PoemDetail.self, "poem", id, today) }
     var subs: Subs? { _ = version; return bridge.json(Subs.self, "subs", today) }

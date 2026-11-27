@@ -5,6 +5,8 @@ struct JournalEditView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State var form: JForm
+    /// Shown above the form, e.g. what quick add found on a guidelines page.
+    var note = ""
     @State private var error = ""
     @State private var confirmDelete = false
 
@@ -21,6 +23,9 @@ struct JournalEditView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if !note.isEmpty {
+                    Section { Text(note).font(F.sans(14)).foregroundStyle(P.ink2) }
+                }
                 Section {
                     TextField("Name", text: $form.name)
                     TextField("Submission page (optional)", text: $form.url)
@@ -101,49 +106,5 @@ struct JournalEditView: View {
             return
         }
         if r.error.isEmpty { dismiss() } else { error = r.error }
-    }
-}
-
-/// The journal directory that ships with Pen Pal.
-struct FindView: View {
-    @Environment(Store.self) private var store
-    @State private var query = ""
-
-    var body: some View {
-        let dir = store.directory(query)
-        List {
-            Section {
-                ForEach(dir?.items ?? []) { e in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(e.name).font(F.sans(16, .semibold))
-                                Text(e.line).font(F.sans(13.5)).foregroundStyle(P.muted)
-                            }
-                            Spacer()
-                            if !e.chip.isEmpty { Chip(text: e.chip, tone: e.tone) }
-                        }
-                        if !e.facts.isEmpty { Text(e.facts).font(F.sans(13)).foregroundStyle(P.ink2) }
-                        if !e.note.isEmpty { Text(e.note).font(F.sans(13.5)).foregroundStyle(P.ink2).lineLimit(3) }
-                        if e.mineId.isEmpty {
-                            Button("Add to my journals") { store.change("addFromDirectory", e.dirId, store.today) }
-                                .buttonStyle(PrimaryButtonStyle(quiet: true))
-                        } else {
-                            NavigationLink(value: JournalRoute(id: e.mineId)) {
-                                Label("In my journals", systemImage: "checkmark").font(F.sans(14, .semibold)).foregroundStyle(P.blue)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .listRowBackground(P.panel)
-                }
-            } footer: {
-                if let dir { ListFooter("\(dir.total) journals, checked by hand on \(dir.checked). Always confirm dates and fees on their site before you send.") }
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .background(P.bg)
-        .searchable(text: $query, prompt: "Search the directory")
-        .navigationTitle("Find journals")
     }
 }

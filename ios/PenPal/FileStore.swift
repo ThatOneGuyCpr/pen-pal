@@ -110,6 +110,8 @@ enum Local {
         return dir
     }
     static var lastSaved: URL { support.appendingPathComponent("last-saved.json") }
+    /// A newer journal directory downloaded from GitHub (the app's own copy is in the bundle).
+    static var directoryUpdate: URL { support.appendingPathComponent("directory-update.json") }
 
     static func stamp() -> String {
         let f = DateFormatter()

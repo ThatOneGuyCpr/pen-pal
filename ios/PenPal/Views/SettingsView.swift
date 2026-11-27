@@ -29,6 +29,23 @@ struct SettingsView: View {
             }
 
             Section {
+                LabeledContent {
+                    if store.directoryChecking { ProgressView() } else {
+                        Button("Check now") { store.checkDirectory(force: true) }
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(store.directoryInfo?.total ?? 0) journals")
+                        Text("Updated \(store.directoryInfo?.checked ?? "")" + (store.directoryInfo?.source == "update" ? ", downloaded" : ", in the app"))
+                            .font(F.sans(13)).foregroundStyle(P.muted)
+                    }
+                }
+                if !store.directoryMessage.isEmpty { Text(store.directoryMessage).font(F.sans(14)).foregroundStyle(P.ink2) }
+            } header: { ListHeader("Journal directory") } footer: {
+                ListFooter("New journals and corrections come from Pen Pal's page on GitHub, checked once a day. Journals you have added keep your details unless you take the new ones.")
+            }
+
+            Section {
                 Toggle("Remind me on this iPhone", isOn: $remindHere)
                     .tint(P.blue)
                     .onChange(of: remindHere) { _, on in

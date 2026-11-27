@@ -54,6 +54,7 @@ struct MainTabs: View {
     @State private var deskPath = NavigationPath()
     @State private var journalsPath = NavigationPath()
     @State private var sentPath = NavigationPath()
+    @State private var poemsPath = NavigationPath()
     @State private var askUndo = false
 
     var body: some View {
@@ -62,7 +63,7 @@ struct MainTabs: View {
                 .tabItem { Label("Desk", systemImage: "tray") }.tag(0)
             NavigationStack(path: $journalsPath) { JournalsView() }
                 .tabItem { Label("Journals", systemImage: "book.closed") }.tag(1)
-            NavigationStack { PoemsView() }
+            NavigationStack(path: $poemsPath) { PoemsView() }
                 .tabItem { Label("Poems", systemImage: "pencil.line") }.tag(2)
             NavigationStack(path: $sentPath) { SentView() }
                 .tabItem { Label("Sent", systemImage: "envelope") }.tag(3)
@@ -94,7 +95,10 @@ struct MainTabs: View {
         let s = store.demoScreen
         if s == "journals" || s.hasPrefix("journal:") { tab = 1 }
         if s.hasPrefix("journal:") { journalsPath.append(JournalRoute(id: String(s.dropFirst(8)))) }
-        if s == "poems" { tab = 2 }
+        if s == "poems" || s.hasPrefix("poem:") { tab = 2 }
+        if s.hasPrefix("poem:") { poemsPath.append(PoemRoute(id: String(s.dropFirst(5)))) }
+        if s == "find" || s == "filters" || s == "quickadd" || s.hasPrefix("dir:") { tab = 1; journalsPath.append(FindRoute()) }
+        if s.hasPrefix("dir:") { journalsPath.append(DirRoute(id: String(s.dropFirst(4)))) }
         if s == "sent" || s == "insights" || s.hasPrefix("editsub:") { tab = 3 }
         if s == "insights" { sentPath.append(InsightsRoute()) }
         if s == "budget" { deskPath.append(BudgetRoute()) }
