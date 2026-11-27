@@ -112,3 +112,43 @@ class Log(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TitleBarMode(unittest.TestCase):
+    """What the page is told about the title bar (2.5: a real Windows frame without its caption)."""
+
+    def setUp(self):
+        import nativeframe
+        import server
+        self.nf, self.server = nativeframe, server
+        self.saved = (server.NATIVE_FRAME, server.FRAMELESS, dict(nativeframe.STATE))
+
+    def tearDown(self):
+        self.server.NATIVE_FRAME, self.server.FRAMELESS, st = self.saved
+        self.nf.STATE.clear()
+        self.nf.STATE.update(st)
+
+    def test_modes(self):
+        api = penpal.Api()
+        api._window = FakeWindow()
+        self.server.NATIVE_FRAME, self.server.FRAMELESS = False, False
+        self.assertEqual(api.win_mode()["mode"], "standard")
+        self.server.FRAMELESS = True
+        self.assertEqual(api.win_mode()["mode"], "frameless")
+        self.server.NATIVE_FRAME = True
+        self.nf.STATE.update(installed=False, appRegion=False, error="boom")
+        self.assertEqual(api.win_mode()["mode"], "standard", "if the caption could not be removed, Windows' own title bar shows")
+        self.nf.STATE.update(installed=True, appRegion=True, error="")
+        m = api.win_mode()
+        self.assertEqual((m["mode"], m["appRegion"]), ("native", True))
+        self.assertIn("win_begin_resize", dir(api))
+        self.assertIn("win_snap_layouts", dir(api))
+
+    def test_fails_soft_off_windows(self):
+        if self.nf.is_windows():
+            self.skipTest("Windows runs the real thing in the build's smoke test")
+        self.assertFalse(self.nf.windows_11())
+        self.nf.STATE["installed"] = False
+        self.assertTrue(self.nf.install(FakeWindow()))  # an error message, not an exception
+        self.assertFalse(self.nf.STATE["installed"])
+        self.assertTrue(self.nf.enable_app_region())  # no WebView2 here

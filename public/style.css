@@ -390,3 +390,36 @@ textarea.mono { font: 0.95rem/1.5 var(--serif); min-height: 140px; }
   .rrow { grid-template-columns: 1fr; gap: 2px; }
 }
 @media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+
+/* ---------- Find journals: filters, saved searches (2.5) ---------- */
+.findbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 8px; }
+.seg { display: flex; flex-wrap: wrap; gap: 6px; }
+label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink2); margin: 0; white-space: nowrap; }
+label.inline input { width: 64px; margin: 0; height: 32px; padding: 0 8px; }
+label.inline select { width: auto; margin: 0; height: 32px; padding: 0 8px; }
+.morefilters { margin: 10px 0 0; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.morefilters summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.morefilters .count { font: 600 11.5px var(--sans); color: var(--blue); background: var(--blue-soft); padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
+.filtergrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 14px; margin-top: 12px; }
+.filtergrid label { font-size: 13px; }
+.savedrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; min-height: 30px; }
+.savedchip { display: inline-flex; align-items: center; border: 1px solid var(--line2); border-radius: 16px; background: var(--panel); overflow: hidden; }
+.savedchip button { border: 0; background: none; border-radius: 0; height: 28px; font-size: 13px; }
+.savedchip .link { padding: 0 4px 0 12px; color: var(--blue); font-weight: 600; }
+.savedchip .x { padding: 0 10px 0 6px; color: var(--muted); font-size: 15px; }
+.savedchip .x:hover { color: var(--red); background: none; }
+.dirchanges { margin: 14px 0 0; padding: 12px 14px; border: 1px solid var(--blue-mid); background: var(--blue-soft); border-radius: 9px; font-size: 13.5px; }
+.dirchanges .btnrow { margin-top: 10px; }
+table.mini { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+table.mini th, table.mini td { text-align: left; padding: 5px 8px 5px 0; border-top: 1px solid var(--line); vertical-align: top; }
+table.mini thead th { border-top: 0; color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+.matches { list-style: none; margin: 8px 0 0; padding: 0; }
+.matches li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.matches li:first-child { border-top: 0; }
+.matches li > div { min-width: 0; }
+
+/* ---------- the title bar inside a real Windows frame (2.5): Windows drags, snaps and maximizes ---------- */
+body.nativeframe .tb-drag { app-region: drag; -webkit-app-region: drag; }
+body.nativeframe .tb-btn, body.nativeframe #resizers { app-region: no-drag; -webkit-app-region: no-drag; }
+body.nativeframe #resizers > div:not([data-edge="n"]):not([data-edge="nw"]):not([data-edge="ne"]) { display: none; }
+body.nativeframe #resizers [data-edge="n"] { height: 4px; }

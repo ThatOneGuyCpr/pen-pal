@@ -39,6 +39,7 @@ for _name in ("stdout", "stderr"):
     if getattr(sys, _name) is None:
         setattr(sys, _name, open(os.devnull, "w", encoding="utf-8"))
 
+import nativeframe  # noqa: E402
 import notify  # noqa: E402
 import server  # noqa: E402
 import updater  # noqa: E402
@@ -154,8 +155,30 @@ class Api:
         return sync_task(bool(want))
 
     # ---- window controls for Pen Pal's own title bar ----
+    def win_mode(self):
+        """native: a real Windows frame without its caption (nativeframe.py); frameless: the older
+        page-driven title bar; standard: Windows' own title bar (also when native set-up failed)."""
+        if server.NATIVE_FRAME:
+            st = nativeframe.STATE
+            return {"mode": "native" if st["installed"] else "standard", "appRegion": st["appRegion"], "snap": nativeframe.windows_11(), "error": st["error"]}
+        return {"mode": "frameless" if server.FRAMELESS else "standard", "appRegion": False, "snap": False, "error": ""}
+
+    def _native(self):
+        return server.NATIVE_FRAME and nativeframe.STATE["installed"]
+
     def win_minimize(self):
+        if self._native():
+            return nativeframe.minimize(self._window)
         self._window.minimize()
+
+    def win_begin_resize(self, edge):
+        return self._native() and nativeframe.begin_resize(self._window, edge)
+
+    def win_begin_move(self):
+        return self._native() and nativeframe.begin_move(self._window)
+
+    def win_snap_layouts(self):
+        return self._native() and nativeframe.snap_layouts(self._window)
 
     def win_bounds(self):
         w = self._window
@@ -169,9 +192,13 @@ class Api:
         self._saved_bounds = None
 
     def win_is_max(self):
+        if self._native():
+            return nativeframe.is_max(self._window)
         return self._saved_bounds is not None
 
     def win_toggle_max(self):
+        if self._native():
+            return nativeframe.toggle_max(self._window)
         w = self._window
         if self._saved_bounds:
             x, y, width, height = self._saved_bounds
@@ -490,7 +517,13 @@ SMOKE_JS = r"""
     const a = window.pywebview.api;
     r.api = Object.keys(a).sort();
     r.nav = document.querySelectorAll('#nav .navitem').length;
+    for (let i = 0; i < 40 && document.getElementById('titlebar').hidden; i++) await new Promise((s) => setTimeout(s, 100));
     r.titlebar = !document.getElementById('titlebar').hidden;
+    r.mode = a.win_mode ? await a.win_mode() : null;
+    r.nativeClass = document.body.classList.contains('nativeframe');
+    const d = document.getElementById('tbDrag').getBoundingClientRect();
+    r.drag = [d.x, d.y, d.width, d.height];
+    r.dpr = window.devicePixelRatio;
     r.b0 = await a.win_bounds();
     r.max1 = await a.win_toggle_max();
     r.isMax = await a.win_is_max();
@@ -506,6 +539,45 @@ SMOKE_JS = r"""
   window.__smoke = r;
 })();
 """
+
+
+def native_checks(window, api, res, check, lines, shots):
+    """The title bar inside a real Windows frame: no caption, Windows' own frame on the sides, a maximize
+    that stops at the taskbar, and (on a runner that takes mouse input) a drag from the title strip."""
+    mode = res.get("mode") or {}
+    check(mode.get("mode") == "native" and res.get("nativeClass") is True, "title bar sits in a real Windows frame (%s)" % mode)
+    check(mode.get("appRegion") is True, "WebView2 treats the title strip as the window's caption")
+    time.sleep(0.8)
+    g = nativeframe.geometry(window)
+    lines.append("     geometry " + json.dumps(g))
+    check(not g["zoomed"] and g["client"][1] == g["window"][1], "no Windows caption above the page")
+    check(g["client"][0] > g["window"][0] and g["client"][3] < g["window"][3], "Windows' own resize frame on the sides and bottom")
+    try:
+        nativeframe.capture(window, os.path.join(shots, "smoke-window.bmp"))
+    except Exception as e:  # noqa: BLE001
+        lines.append("info could not take a screenshot: %r" % e)
+    check(api.win_toggle_max() is True, "maximize the Windows way")
+    time.sleep(0.6)
+    g2, wa = nativeframe.geometry(window), nativeframe.work_rect(window)
+    lines.append("     maximized %s, work area %s" % (json.dumps(g2), wa))
+    check(g2["zoomed"] and g2["client"] == wa, "maximized fills the area above the taskbar exactly")
+    try:
+        nativeframe.capture(window, os.path.join(shots, "smoke-maximized.bmp"))
+    except Exception:  # noqa: BLE001
+        pass
+    check(api.win_toggle_max() is False and not nativeframe.is_max(window), "restore")
+    time.sleep(0.6)
+    # A real mouse drag on the title strip. Runners do not always take mouse input, so this is reported, not required.
+    g = nativeframe.geometry(window)
+    dx, dy = res.get("drag") or [0, 0, 0, 0], float(res.get("dpr") or 1)
+    x = g["client"][0] + (dx[0] + min(240, dx[2] / 2)) * dy
+    y = g["client"][1] + (dx[1] + dx[3] / 2) * dy
+    before, after = nativeframe.mouse_drag(window, x, y, 140, 70)
+    moved = (after[0] - before[0], after[1] - before[1])
+    lines.append("info drag from the title strip moved the window by %s (asked for (140, 70)): %s" % (moved, "works" if abs(moved[0] - 140) <= 6 and abs(moved[1] - 70) <= 6 else "no mouse input here, or it did not move"))
+    g = nativeframe.geometry(window)
+    before, after = nativeframe.mouse_drag(window, g["client"][0] + 400 * dy, g["client"][1] + 1, 0, -50)
+    lines.append("info drag on the top edge: top %d -> %d, height %d -> %d" % (before[1], after[1], before[3] - before[1], after[3] - after[1]))
 
 
 def run_smoke(out_path, title_bar):
@@ -556,6 +628,10 @@ def run_smoke(out_path, title_bar):
             check(b1 != b0, "maximize moved or resized the window")
             check(abs(b2[2] - 1000) <= 2 and abs(b2[3] - 700) <= 2, "resize to 1000x700")
             check(b3[2] >= 899 and b3[3] >= 619, "never smaller than 900x620")
+            if frameless and nativeframe.is_windows():
+                native_checks(window, api, res, check, lines, os.path.dirname(os.path.abspath(out_path)))
+            elif nativeframe.is_windows():
+                check((res.get("mode") or {}).get("mode") == "standard", "Windows' own title bar")
             # Close while the page reports an unsaved edit: the close waits, then goes through. No freeze.
             window.evaluate_js("window.pywebview.api.set_busy(true); setTimeout(() => window.pywebview.api.set_busy(false), 1500)")
             time.sleep(0.5)
@@ -670,13 +746,27 @@ def main():
 
 
 def open_window(webview, url, frameless):
+    """frameless means "Pen Pal's own title bar". On Windows that is a real Windows frame with the caption
+    taken away (nativeframe.py), so resizing, snapping and maximizing behave like any Windows app.
+    Elsewhere (or with PENPAL_FRAMELESS=1) it is the older frameless window the page moves itself."""
     server.DESKTOP = True
     server.QUIET_OK = True
     server.FRAMELESS = frameless
+    native = frameless and nativeframe.is_windows() and os.environ.get("PENPAL_FRAMELESS") != "1"
+    if native:
+        err = nativeframe.enable_app_region()
+        if err:
+            LOG.warning(err)
+    server.NATIVE_FRAME = native
     api = Api()
     window = webview.create_window("Pen Pal", url, js_api=api, width=1280, height=840, min_size=(900, 620), background_color="#F8F9F9",
-                                   frameless=frameless, easy_drag=False, shadow=True)
+                                   frameless=frameless and not native, easy_drag=False, shadow=not native)
     api._window = window
+    if native:
+        def before_show():
+            err = nativeframe.install(window)
+            LOG.info("title bar: %s", err or "native frame without a caption")
+        window.events.before_show += before_show
     server.RESTART_HOOK = window.destroy  # after an update is swapped in, the new copy is already starting
     window.events.closing += closing_handler(api, window)
     try:

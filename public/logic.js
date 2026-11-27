@@ -211,6 +211,7 @@
       deskDays: inRange(s.deskDays, 7, 180, 60),
       notifyDays: inRange(s.notifyDays, 0, 30, 3),
       checkUpdates: s.checkUpdates !== false,
+      savedFinds: normalizeSavedFinds(s.savedFinds),
     };
   }
 
@@ -1060,22 +1061,53 @@
     return out.sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  // ---------- the journal directory that ships with the app ----------
-  function normalizeDirEntry(e) {
+  // ---------- the journal directory that ships with the app (and updates itself) ----------
+  // What a journal says it is especially for, or how it describes its taste. Only tagged when the
+  // journal says so itself.
+  const FOCUS = [
+    ['black', 'Black writers'], ['bipoc', 'Writers of color'], ['latinx', 'Latinx writers'], ['asian', 'Asian American writers'],
+    ['indigenous', 'Indigenous writers'], ['lgbtq', 'LGBTQ+ writers'], ['women', 'Women writers'], ['emerging', 'Emerging writers'],
+    ['south', 'The South'], ['florida', 'Florida'], ['narrative', 'Narrative'], ['experimental', 'Experimental'],
+    ['formal', 'Formal verse'], ['translation', 'Translation'], ['nature', 'Nature'], ['speculative', 'Speculative'],
+  ];
+  const FOCUS_KEYS = FOCUS.map((f) => f[0]);
+  const focusLabel = (k) => (FOCUS.find((f) => f[0] === k) || [k, k])[1];
+  const FORMATS = ['print', 'online'];
+  function normalizeDirEntry(e, checked) {
     e = e || {};
     const windows = arr(e.windows).map((w) => ({ opens: MMDD(w && w[0]), closes: MMDD(w && w[1]) })).filter((w) => w.opens && w.closes);
+    const tags = arr(e.tags).map((t) => str(t, 60)).filter(Boolean);
+    // Older entries said print / online in their tags.
+    const format = (Array.isArray(e.format) ? e.format : tags.map((t) => t.toLowerCase())).filter((f) => FORMATS.includes(f));
+    const pay = numOrNull(e.payPerPoem);
     return {
       id: str(e.id, 80), name: str(e.name, 300).trim(), url: cleanUrl(e.url),
       windows, yearRound: e.yearRound === true, windowsUnknown: !windows.length && e.yearRound !== true,
       fee: numOrNull(e.fee), feeNote: str(e.feeNote, 200), maxPoems: intOrNull(e.maxPoems),
       simSubs: YN.includes(e.simSubs) ? e.simSubs : 'unknown', pays: YN.includes(e.pays) ? e.pays : 'unknown',
-      paysNote: str(e.paysNote, 200), reprints: YN.includes(e.reprints) ? e.reprints : 'unknown',
-      replyDays: intOrNull(e.replyDays), tags: arr(e.tags).map((t) => str(t, 60)).filter(Boolean), note: str(e.note, 1000),
+      paysNote: str(e.paysNote, 200), payPerPoem: pay !== null && pay > 0 ? pay : null,
+      reprints: YN.includes(e.reprints) ? e.reprints : 'unknown',
+      replyDays: intOrNull(e.replyDays),
+      format: FORMATS.filter((f) => format.includes(f)),
+      focus: FOCUS_KEYS.filter((k) => arr(e.focus).includes(k)),
+      tags: tags.filter((t) => !FORMATS.includes(t.toLowerCase())),
+      note: str(e.note, 1000),
+      checked: dateOr(e.checked) || dateOr(checked),
     };
   }
   function loadDirectory(raw) {
     raw = raw && typeof raw === 'object' ? raw : {};
-    return { checked: dateOr(raw.checked), about: str(raw.about, 1000), journals: arr(raw.journals).map(normalizeDirEntry).filter((e) => e.id && e.name) };
+    const checked = dateOr(raw.checked);
+    const seen = new Set();
+    const journals = arr(raw.journals).map((e) => normalizeDirEntry(e, checked)).filter((e) => e.id && e.name && !seen.has(e.id) && seen.add(e.id));
+    return { rev: Number.isInteger(raw.rev) && raw.rev > 0 ? raw.rev : 0, checked, about: str(raw.about, 1000), journals };
+  }
+  // The newer of two directories (the one inside the app, and one downloaded later). Bad downloads lose.
+  function pickDirectory(bundled, downloaded) {
+    const a = loadDirectory(bundled), b = loadDirectory(downloaded);
+    if (!b.journals.length) return { dir: a, source: 'app' };
+    const newer = b.rev > a.rev || (b.rev === a.rev && b.checked > a.checked);
+    return newer ? { dir: b, source: 'update' } : { dir: a, source: 'app' };
   }
   // Turn a directory entry into one of your journals. Windows become yearly; the first is the main one.
   function dirToJournal(e, today, checked) {
@@ -1093,43 +1125,217 @@
     return normalizeJournal({
       id: uid(), name: e.name, url: e.url, opens, closes, repeat, extraWindows: extra, alwaysOpen: e.yearRound,
       fee: e.fee, maxPoems: e.maxPoems, simSubs: e.simSubs, pays: e.pays, reprints: e.reprints, replyDays: e.replyDays,
-      notes, dirId: e.id, checked,
+      notes, dirId: e.id, checked: e.checked || checked,
     });
   }
   const findMine = (data, e) => data.journals.find((j) => j.dirId === e.id) || data.journals.find((j) => j.name.trim().toLowerCase() === e.name.toLowerCase()) || null;
-  // Where a directory journal stands today: open, opening soon, closed, open all year, or not known.
-  function dirState(e, today) {
-    if (e.yearRound) return { kind: 'always', opens: '', closes: '', daysLeft: null, daysUntil: null };
-    if (!e.windows.length) return { kind: 'unknown', opens: '', closes: '', daysLeft: null, daysUntil: null };
-    const w = currentWindow(dirToJournal(e, today, ''), today);
-    if (w.opens <= today) return { kind: 'open', opens: w.opens, closes: w.closes, daysLeft: daysBetween(today, w.closes), daysUntil: 0 };
+  // Where a reading period stands today, from a window { opens, closes } in real dates.
+  function stateFromWindow(w, today, within) {
+    if (w.always) return { kind: 'always', opens: '', closes: '', daysLeft: null, daysUntil: null };
+    if (!w.opens || !w.closes) return { kind: 'unknown', opens: '', closes: '', daysLeft: null, daysUntil: null };
+    if (w.opens <= today && today <= w.closes) return { kind: 'open', opens: w.opens, closes: w.closes, daysLeft: daysBetween(today, w.closes), daysUntil: 0 };
+    if (w.closes < today) return { kind: 'closed', opens: w.opens, closes: w.closes, daysLeft: null, daysUntil: null };
     const until = daysBetween(today, w.opens);
-    return { kind: until <= 30 ? 'soon' : 'closed', opens: w.opens, closes: w.closes, daysLeft: null, daysUntil: until };
+    return { kind: until <= (within == null ? 30 : within) ? 'soon' : 'closed', opens: w.opens, closes: w.closes, daysLeft: null, daysUntil: until };
   }
-  // opts: { q, openSoon, free, sim, pays, reprints, notSent }
+  // Where a directory journal stands today: open, opening soon, closed, open all year, or not known.
+  function dirState(e, today, within) {
+    if (e.yearRound) return stateFromWindow({ always: true }, today);
+    if (!e.windows.length) return stateFromWindow({}, today);
+    return stateFromWindow(currentWindow(dirToJournal(e, today, ''), today), today, within);
+  }
+  // The same for one of your own journals.
+  const journalState = (j, today, within) => stateFromWindow(currentWindow(j, today), today, within);
+
+  // Search options. Old saved options (openSoon, free, sim, pays, reprints, notSent) still work.
+  const FIND_WHEN = ['any', 'open', 'soon', 'closing'];
+  const FIND_SORTS = ['smart', 'closing', 'reply', 'pay', 'fee', 'name'];
+  function normalizeFindOpts(o) {
+    o = o && typeof o === 'object' ? o : {};
+    const n = (v, lo, hi) => { const x = numOrNull(v); return x !== null && x >= lo && x <= hi ? x : null; };
+    const when = FIND_WHEN.includes(o.when) ? o.when : o.openSoon ? 'soon' : 'any';
+    return {
+      q: str(o.q, 200),
+      when,
+      within: n(o.within, 1, 365) === null ? 30 : Math.round(n(o.within, 1, 365)),
+      maxFee: o.free ? 0 : n(o.maxFee, 0, 1000),
+      sim: o.sim === true, pays: o.pays === true, reprints: o.reprints === true, notSent: o.notSent === true,
+      payMin: n(o.payMin, 0, 100000),
+      maxReply: n(o.maxReply, 1, 2000),
+      format: FORMATS.includes(o.format) ? o.format : '',
+      focus: FOCUS_KEYS.filter((k) => arr(o.focus).includes(k)),
+      sort: FIND_SORTS.includes(o.sort) ? o.sort : 'smart',
+    };
+  }
+  // How many filters are on, for a "Filters (3)" label. The search words and sort do not count.
+  function findFilterCount(o) {
+    o = normalizeFindOpts(o);
+    return (o.when !== 'any') + (o.maxFee !== null) + o.sim + o.pays + o.reprints + o.notSent + (o.payMin !== null && o.payMin > 0) +
+      (o.maxReply !== null) + !!o.format + o.focus.length;
+  }
+  function matchesFind(e, state, sent, o) {
+    if (o.when === 'open' && !['open', 'always'].includes(state.kind)) return false;
+    if (o.when === 'soon' && !['open', 'always', 'soon'].includes(state.kind)) return false;
+    if (o.when === 'closing' && !(state.kind === 'open' && state.daysLeft <= o.within)) return false;
+    if (o.maxFee !== null && (e.fee === null || e.fee > o.maxFee)) return false;
+    if (o.sim && e.simSubs !== 'yes') return false;
+    if (o.pays && e.pays !== 'yes') return false;
+    if (o.payMin && !(e.pays === 'yes' && e.payPerPoem !== null && e.payPerPoem >= o.payMin)) return false;
+    if (o.reprints && e.reprints !== 'yes') return false;
+    if (o.maxReply !== null && !(e.replyDays && e.replyDays <= o.maxReply)) return false;
+    if (o.format && !e.format.includes(o.format)) return false;
+    if (o.focus.some((k) => !e.focus.includes(k))) return false;
+    if (o.notSent && sent) return false;
+    return true;
+  }
+  const RANK = { open: 0, soon: 1, always: 2, closed: 3, unknown: 4 };
+  const byName = (a, b) => a.entry.name.localeCompare(b.entry.name);
+  const SORTERS = {
+    smart: (a, b) => RANK[a.state.kind] - RANK[b.state.kind] || (a.state.daysLeft ?? a.state.daysUntil ?? 0) - (b.state.daysLeft ?? b.state.daysUntil ?? 0) || byName(a, b),
+    // Open ones by closing date first, then the ones opening soonest. All-year journals after those.
+    closing: (a, b) => {
+      const k = (r) => (r.state.kind === 'open' ? r.state.daysLeft : r.state.kind === 'soon' || r.state.kind === 'closed' ? 1000 + r.state.daysUntil : r.state.kind === 'always' ? 5000 : 9000);
+      return k(a) - k(b) || byName(a, b);
+    },
+    reply: (a, b) => (a.entry.replyDays || 1e6) - (b.entry.replyDays || 1e6) || byName(a, b),
+    pay: (a, b) => (b.entry.payPerPoem || (b.entry.pays === 'yes' ? 0.5 : 0)) - (a.entry.payPerPoem || (a.entry.pays === 'yes' ? 0.5 : 0)) || byName(a, b),
+    fee: (a, b) => (a.entry.fee ?? 1e6) - (b.entry.fee ?? 1e6) || byName(a, b),
+    name: byName,
+  };
+  // Could this poem go to this directory journal? No if it is placed, the journal already saw it, or
+  // the journal takes no simultaneous submissions while the poem is out.
+  function fitsPoem(data, e, mine, poemId) {
+    if (!poemById(data, poemId) || placement(data, poemId)) return false;
+    if (mine && data.submissions.some((s) => s.journalId === mine.id && s.poemIds.includes(poemId))) return false;
+    return !(e.simSubs === 'no' && pendingSubsFor(data, poemId).length);
+  }
+  // opts.poemId (not saved with a search): only journals that could take that poem.
   function searchDirectory(dir, data, opts, today) {
-    opts = opts || {};
-    const words = String(opts.q || '').toLowerCase().split(/\s+/).filter(Boolean);
-    const rank = { open: 0, soon: 1, always: 2, closed: 3, unknown: 4 };
+    const o = normalizeFindOpts(opts);
+    const poemId = opts && typeof opts.poemId === 'string' ? opts.poemId : '';
+    const words = o.q.toLowerCase().split(/\s+/).filter(Boolean);
     return dir.journals
       .map((e) => {
         const mine = findMine(data, e);
         const sent = mine ? data.submissions.filter((s) => s.journalId === mine.id).length : 0;
-        return { entry: e, state: dirState(e, today), mine, sent };
+        return { entry: e, state: dirState(e, today, o.within), mine, sent };
       })
       .filter(({ entry: e, state, sent }) => {
-        const hay = (e.name + ' ' + e.note + ' ' + e.tags.join(' ') + ' ' + e.paysNote).toLowerCase();
+        const hay = (e.name + ' ' + e.note + ' ' + e.tags.join(' ') + ' ' + e.paysNote + ' ' + e.focus.map(focusLabel).join(' ')).toLowerCase();
         if (words.some((w) => !hay.includes(w))) return false;
-        if (opts.openSoon && !['open', 'soon', 'always'].includes(state.kind)) return false;
-        if (opts.free && e.fee !== 0) return false;
-        if (opts.sim && e.simSubs !== 'yes') return false;
-        if (opts.pays && e.pays !== 'yes') return false;
-        if (opts.reprints && e.reprints !== 'yes') return false;
-        if (opts.notSent && sent) return false;
-        return true;
+        if (poemId && !fitsPoem(data, e, findMine(data, e), poemId)) return false;
+        return matchesFind(e, state, sent, o);
       })
-      .sort((a, b) => rank[a.state.kind] - rank[b.state.kind] || (a.state.daysLeft ?? a.state.daysUntil ?? 0) - (b.state.daysLeft ?? b.state.daysUntil ?? 0) || a.entry.name.localeCompare(b.entry.name));
+      .sort(SORTERS[o.sort]);
   }
+  // Saved searches live in settings, so they follow your data to every computer and the iPhone.
+  function saveFind(data, name, opts) {
+    const nm = str(name, 60).trim();
+    if (!nm) return null;
+    const o = normalizeFindOpts(opts);
+    const list = data.settings.savedFinds;
+    const same = list.find((f) => f.name.toLowerCase() === nm.toLowerCase());
+    if (same) { same.opts = o; return same; }
+    const f = { id: uid(), name: nm, opts: o };
+    list.push(f);
+    if (list.length > 20) list.shift();
+    return f;
+  }
+  function removeFind(data, id) {
+    data.settings.savedFinds = data.settings.savedFinds.filter((f) => f.id !== id);
+  }
+  function normalizeSavedFinds(list) {
+    return arr(list).filter((f) => f && typeof f.name === 'string' && f.name.trim())
+      .map((f) => ({ id: str(f.id, 80) || uid(), name: str(f.name, 60).trim(), opts: normalizeFindOpts(f.opts) })).slice(-20);
+  }
+
+  // ---------- where can this poem go? ----------
+  // Journals (yours and the directory's) that are open now or opening within `within` days and have not
+  // seen this poem. Leaves out ones that do not take simultaneous submissions while the poem is out.
+  function poemMatches(data, dir, poemId, today, opts) {
+    opts = opts || {};
+    const within = opts.within == null ? 30 : opts.within;
+    const poem = poemById(data, poemId);
+    const out = { poem, placed: false, out: 0, items: [], hidden: { seen: 0, noSim: 0, closed: 0, fee: 0 } };
+    if (!poem) return out;
+    if (placement(data, poemId)) { out.placed = true; return out; }
+    const pending = pendingSubsFor(data, poemId);
+    out.out = pending.length;
+    const seenIds = new Set(data.submissions.filter((s) => s.poemIds.includes(poemId)).map((s) => s.journalId));
+    const cands = [];
+    const usedDir = new Set();
+    for (const j of data.journals) {
+      if (j.dirId) usedDir.add(j.dirId);
+      cands.push({ key: 'j:' + j.id, name: j.name, mine: j, entry: dir ? dir.journals.find((e) => e.id === j.dirId) || null : null, state: journalState(j, today, within),
+        fee: j.fee, simSubs: j.simSubs, maxPoems: j.maxPoems, url: j.url });
+    }
+    for (const e of dir ? dir.journals : []) {
+      if (usedDir.has(e.id) || data.journals.some((j) => j.name.trim().toLowerCase() === e.name.toLowerCase())) continue;
+      cands.push({ key: 'd:' + e.id, name: e.name, mine: null, entry: e, state: dirState(e, today, within), fee: e.fee, simSubs: e.simSubs, maxPoems: e.maxPoems, url: e.url });
+    }
+    const left = budgetSummary(data, today.slice(0, 7));
+    for (const c of cands) {
+      if (c.mine && seenIds.has(c.mine.id)) { out.hidden.seen++; continue; }
+      if (!['open', 'always', 'soon'].includes(c.state.kind)) { out.hidden.closed++; continue; }
+      if (pending.length && c.simSubs === 'no') { out.hidden.noSim++; continue; }
+      if (opts.free && c.fee !== 0) { out.hidden.fee++; continue; }
+      const notes = [];
+      if (pending.length && c.simSubs === 'unknown') notes.push('Out elsewhere; check whether they take simultaneous submissions.');
+      if (c.mine && data.submissions.some((s) => s.journalId === c.mine.id && s.status === 'pending')) notes.push('You already have a submission waiting there.');
+      if (c.fee && left.budget !== null && round2(left.counted + c.fee) > left.budget) notes.push('The fee would put you over this month\'s budget.');
+      if (c.fee === null) notes.push('Fee not confirmed.');
+      out.items.push(Object.assign(c, { notes }));
+    }
+    const k = (c) => (c.state.kind === 'open' ? c.state.daysLeft : c.state.kind === 'always' ? 500 : 1000 + c.state.daysUntil);
+    out.items.sort((a, b) => k(a) - k(b) || !!b.mine - !!a.mine || a.name.localeCompare(b.name));
+    return out;
+  }
+
+  // ---------- newer directory details for a journal you saved ----------
+  // Your copy always wins: Pen Pal only offers the changes, and only when the directory checked the
+  // journal after you added it (or last took its details).
+  const DIR_FIELDS = [
+    ['windows', 'Reading period'], ['fee', 'Fee'], ['maxPoems', 'Poems per submission'], ['simSubs', 'Simultaneous'],
+    ['pays', 'Pays'], ['reprints', 'Reprints'], ['replyDays', 'Usual reply'], ['url', 'Guidelines link'],
+  ];
+  function mineFields(j) {
+    const win = j.alwaysOpen ? 'Open all year' : isRecurring(j) ? windowsText([{ opens: j.opens.slice(5), closes: j.closes.slice(5) }].concat(j.extraWindows)) : '';
+    return { windows: win, fee: j.fee, maxPoems: j.maxPoems, simSubs: j.simSubs, pays: j.pays, reprints: j.reprints, replyDays: j.replyDays, url: j.url };
+  }
+  function dirFields(e) {
+    return { windows: e.yearRound ? 'Open all year' : windowsText(e.windows), fee: e.fee, maxPoems: e.maxPoems, simSubs: e.simSubs, pays: e.pays, reprints: e.reprints, replyDays: e.replyDays, url: e.url };
+  }
+  const showField = (k, v) => (v === null || v === '' || v === 'unknown' ? 'Not known' : k === 'fee' ? (v === 0 ? 'Free' : '$' + v) : k === 'replyDays' ? 'About ' + v + ' days' : String(v));
+  function dirChanges(journal, entry) {
+    if (!journal || !entry || !entry.checked || (journal.checked && journal.checked >= entry.checked)) return [];
+    const a = mineFields(journal), b = dirFields(entry);
+    return DIR_FIELDS.filter(([k]) => {
+      const nb = b[k];
+      if (nb === null || nb === '' || nb === 'unknown') return false; // the directory does not know: keep yours
+      return String(a[k]) !== String(nb);
+    }).map(([k, label]) => ({ field: k, label, mine: showField(k, a[k]), theirs: showField(k, b[k]) }));
+  }
+  // Take the directory's details for the changed fields. Your notes, bell and history stay.
+  function applyDirChanges(data, journalId, entry, today) {
+    const j = journalById(data, journalId);
+    if (!j || !entry) return false;
+    const changes = dirChanges(j, entry);
+    const fresh = dirToJournal(entry, today, entry.checked);
+    for (const c of changes) {
+      if (c.field === 'windows') {
+        Object.assign(j, { opens: fresh.opens, closes: fresh.closes, repeat: fresh.repeat, extraWindows: fresh.extraWindows, alwaysOpen: fresh.alwaysOpen });
+      } else j[c.field] = fresh[c.field];
+    }
+    j.checked = entry.checked;
+    j.dirId = entry.id;
+    return changes.length > 0;
+  }
+  // "Keep mine": stop offering these changes until the directory checks the journal again.
+  function dismissDirChanges(data, journalId, entry) {
+    const j = journalById(data, journalId);
+    if (j && entry && entry.checked) j.checked = entry.checked;
+  }
+
   const dirIsStale = (dir, today, days) => !dir.checked || daysBetween(dir.checked, today) > (days || 180);
   // Search the big databases on their own sites. Neither documents a search link, so this is a site search.
   function searchLinks(q) {
@@ -1141,6 +1347,104 @@
       chillSubsBrowse: 'https://www.chillsubs.com/browse/magazines',
       pwOpen: 'https://www.pw.org/open-reading-periods',
     };
+  }
+
+  // ---------- quick add: read a journal's guidelines ----------
+  // Pulls the details Pen Pal tracks out of a guidelines page (or pasted text). Everything it finds is
+  // shown in the journal form to check before saving; anything it cannot find stays blank.
+  const NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12 };
+  const numWord = (w) => (/^\d+$/.test(w) ? Number(w) : NUM_WORDS[String(w).toLowerCase()] || null);
+  const MON_RE = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?';
+  const p2 = (n) => String(n).padStart(2, '0');
+  function mdOf(mon, day) {
+    const m = MONTHS[mon.toLowerCase().slice(0, 3)];
+    const md = m && day ? p2(m) + '-' + p2(Number(day)) : '';
+    return MMDD(md);
+  }
+  function parseGuidelines(text, title) {
+    const raw = String(text || '').replace(/\s+/g, ' ').slice(0, 200000);
+    const t = raw.toLowerCase();
+    const found = [];
+    const out = { name: '', windows: [], yearRound: false, fee: null, maxPoems: null, simSubs: 'unknown', pays: 'unknown', paysNote: '', reprints: 'unknown', replyDays: null, found };
+    // Name: the page title before " | " or " - ", without words like "Submissions".
+    const nm = String(title || '').split(/\s[|\u2013\u2014-]\s|:\s/).map((s) => s.replace(/\b(submissions?|submission guidelines|guidelines|submit|home)\b/gi, '').trim()).filter((s) => s.length > 1);
+    if (nm.length) out.name = nm.sort((a, b) => a.length - b.length)[0].slice(0, 120);
+
+    // Reading periods: "September 1 to November 30", "Jan 15 - Mar 1", "from 1 March through 31 May".
+    const dayRe = '(\\d{1,2})(?:st|nd|rd|th)?';
+    const sep = '\\s*(?:-|\u2013|\u2014|to|through|thru|until|till)\\s*';
+    const yr = '(?:,?\\s*\\d{4})?';
+    const re1 = new RegExp('\\b' + MON_RE + '\\s+' + dayRe + yr + sep + MON_RE + '\\s+' + dayRe, 'gi');
+    const re2 = new RegExp('\\b' + dayRe + '\\s+' + MON_RE + yr + sep + dayRe + '\\s+' + MON_RE, 'gi');
+    const seen = new Set();
+    const add = (o, c) => { if (o && c && !seen.has(o + c)) { seen.add(o + c); out.windows.push({ opens: o, closes: c }); } };
+    let m;
+    while ((m = re1.exec(raw)) && out.windows.length < 4) add(mdOf(m[1], m[2]), mdOf(m[3], m[4]));
+    while ((m = re2.exec(raw)) && out.windows.length < 4) add(mdOf(m[2], m[1]), mdOf(m[4], m[3]));
+    // "the month of September" / "throughout October": a whole month.
+    const whole = t.match(new RegExp('(?:during|throughout|the month of|open (?:in|for))\\s+(?:the month of\\s+)?' + MON_RE + '(?![a-z\\s]*\\d)'));
+    if (!out.windows.length && whole) {
+      const mo = MONTHS[whole[1].slice(0, 3)];
+      const last = new Date(Date.UTC(2028, mo, 0)).getUTCDate();
+      add(p2(mo) + '-01', p2(mo) + '-' + p2(last));
+    }
+    if (/\b(year[- ]round|all year|throughout the year|any time of (the )?year|open (at )?all times|rolling basis)\b/.test(t) && !out.windows.length) out.yearRound = true;
+    if (out.windows.length) found.push('reading period');
+    if (out.yearRound) found.push('open all year');
+
+    // Fee. Only dollar amounts next to the word fee count, so payment amounts are not mistaken for fees.
+    if (/\b(no (submission |reading )?fees?|free to submit|never charge|do not charge|don't charge|no charge|fee[- ]free|without a fee|submissions are free)\b/.test(t)) out.fee = 0;
+    else {
+      const f = t.match(/(?:fee|charge)[^.$]{0,40}\$\s?(\d+(?:\.\d{1,2})?)/) || t.match(/\$\s?(\d+(?:\.\d{1,2})?)\s*(?:submission|reading|processing|administrative|admin|tip jar)?\s*fee/);
+      if (f) out.fee = Number(f[1]);
+    }
+    if (out.fee !== null) found.push('fee');
+
+    // Poems per submission.
+    const w = '(\\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve)';
+    const pm = t.match(new RegExp('(?:up to|no more than|maximum of|max(?:imum)?|at most|not exceed)\\s+' + w + '\\s+(?:\\w+\\s+){0,2}poems?')) ||
+      t.match(new RegExp(w + '\\s*(?:-|\u2013|to)\\s*' + w + '\\s+(?:\\w+\\s+){0,2}poems?')) ||
+      t.match(new RegExp('(?:submit|send)\\s+' + w + '\\s+(?:\\w+\\s+){0,2}poems?'));
+    if (pm) {
+      const nums = pm.slice(1).filter(Boolean).map(numWord).filter((n) => n && n <= 30);
+      if (nums.length) { out.maxPoems = Math.max.apply(null, nums); found.push('poems per submission'); }
+    }
+
+    // Simultaneous submissions.
+    if (/\b(no|not accept(ing)?|do not (accept|consider|allow)|don't (accept|consider|allow)|cannot (accept|consider)|unable to (accept|consider))\s+(any\s+)?simultaneous/.test(t) ||
+      /simultaneous submissions? (are|is) not\b/.test(t)) out.simSubs = 'no';
+    else if (/simultaneous submissions? (are|is)?\s*(welcome|accepted|encouraged|fine|ok|okay|allowed|considered)|(accept|welcome|consider|allow)s?\s+simultaneous|simultaneous submissions?\s*:\s*yes/.test(t)) out.simSubs = 'yes';
+    if (out.simSubs !== 'unknown') found.push('simultaneous submissions');
+
+    // Payment.
+    const pay = raw.match(/(?:pay|pays|payment of|honorarium of|honorarium|receive|compensat\w*)[^.$]{0,40}(\$\s?\d+(?:\.\d{1,2})?(?:\s*(?:per|a|\/)\s*(?:poem|page|line|piece|contributor|submission|author))?)/i);
+    if (/\b(unable to (offer |provide )?pay|cannot (currently )?pay|can't (currently )?pay|do not (currently )?pay|don't (currently )?pay|no payment|not able to pay|unpaid|we are not a paying)\b/.test(t)) out.pays = 'no';
+    else if (pay) { out.pays = 'yes'; out.paysNote = pay[1].replace(/\s+/g, ' '); }
+    if (out.pays !== 'unknown') found.push('payment');
+
+    // Reprints.
+    if (/\b(no reprints|do not (accept|consider|publish) (reprints|previously published)|don't (accept|consider) (reprints|previously published)|not (accept|consider) (any )?(reprints|previously published)|must be (previously )?unpublished|only (accept|consider) (original,? )?unpublished|previously published (work|poems|pieces)? (is|are|will) not)\b/.test(t)) out.reprints = 'no';
+    else if (/\b(reprints (are )?(welcome|accepted|considered)|(accept|consider|welcome)s? reprints|previously published (work|poems)? (is|are) (welcome|fine|ok|accepted))\b/.test(t)) out.reprints = 'yes';
+    if (out.reprints !== 'unknown') found.push('reprints');
+
+    // Reply time: "respond within three months", "response time is 6-8 weeks".
+    const rm = t.match(new RegExp('(?:respon[ds]e?\\w*|reply|replies|hear back|decision)[^.]{0,50}?' + w + '(?:\\s*(?:-|\u2013|to)\\s*' + w + ')?\\s+(day|week|month)s?'));
+    if (rm) {
+      const n = numWord(rm[2] || rm[1]);
+      const per = { day: 1, week: 7, month: 30 }[rm[3]];
+      if (n && per) { out.replyDays = n * per; found.push('reply time'); }
+    }
+    return out;
+  }
+  // Fill a journal from what parseGuidelines found (for the journal form, before you save).
+  function journalFromGuidelines(g, url, today) {
+    const e = normalizeDirEntry({ id: 'x', name: g.name || 'New journal', url, windows: g.windows.map((w) => [w.opens, w.closes]), yearRound: g.yearRound,
+      fee: g.fee, maxPoems: g.maxPoems, simSubs: g.simSubs, pays: g.pays, paysNote: g.paysNote, reprints: g.reprints, replyDays: g.replyDays });
+    const j = dirToJournal(e, today, '');
+    j.dirId = '';
+    j.checked = today;
+    j.notes = g.pays === 'yes' && g.paysNote ? 'Pays ' + g.paysNote : '';
+    return j;
   }
 
   // ---------- importing journals from a CSV ----------
@@ -1462,7 +1766,9 @@
     feeItems, budgetFor, budgetSummary, budgetYear, budgetCheck, setBudget, monthName, addMonths,
     expectedReply, queryReminders, markQueried, snoozeQuery,
     suggestedCredit, rightsReminders,
-    normalizeDirEntry, loadDirectory, dirToJournal, dirState, searchDirectory, dirIsStale, searchLinks,
+    normalizeDirEntry, loadDirectory, pickDirectory, dirToJournal, dirState, journalState, searchDirectory, dirIsStale, searchLinks,
+    FOCUS, FIND_WHEN, FIND_SORTS, fitsPoem, focusLabel, normalizeFindOpts, findFilterCount, saveFind, removeFind,
+    poemMatches, dirChanges, applyDirChanges, dismissDirChanges, parseGuidelines, journalFromGuidelines,
     guessSubMapping, guessImportKind, parseSubStatus, splitTitles, buildSubImport, applySubImport,
     entriesFor, isActiveEntry, manuscriptState, manuscriptSummary, manuscriptWarnings, checkEntry, entryAlerts, setEntryStatus, removeManuscript,
     poemOutcome, poemHistory, nextTargets,

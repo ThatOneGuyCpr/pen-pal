@@ -55,6 +55,23 @@ jobs:
             if ($p.ExitCode -ne 0) { exit 1 }
           }
 
+      - name: Keep the title bar screenshots on the ci-screens-windows branch (for review)
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          New-Item -ItemType Directory -Force shots | Out-Null
+          Get-ChildItem *.bmp | ForEach-Object { $img = [System.Drawing.Image]::FromFile($_.FullName); $img.Save("$pwd\shots\$($_.BaseName).png", [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose() }
+          if (-not (Get-ChildItem shots\*.png -ErrorAction SilentlyContinue)) { Write-Host "no screenshots"; exit 0 }
+          Copy-Item smoke-*.txt shots\
+          cd shots
+          git init -q -b ci-screens-windows
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add .
+          git commit -qm "Windows screenshots for $env:GITHUB_SHA"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-screens-windows
+
       - name: Reminders end to end (notifications and the daily task)
         shell: pwsh
         run: |

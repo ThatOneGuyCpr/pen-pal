@@ -250,7 +250,7 @@ test('old data files load unchanged and gain the new empty parts', () => {
   assert.equal(d.journals[0].repeat, 'none');
   assert.deepEqual(d.manuscripts, []);
   assert.deepEqual(d.entries, []);
-  assert.deepEqual(d.settings, { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: {}, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, notifyDays: 3, checkUpdates: true });
+  assert.deepEqual(d.settings, { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: {}, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, notifyDays: 3, checkUpdates: true, savedFinds: [] });
   assert.deepEqual(d.poems[0].rights, { bought: '', issue: '', pubDate: '', exclusiveUntil: '', reprints: 'unknown', revert: '', credit: '' });
   assert.equal(d.journals[0].alwaysOpen, false);
   // normalizing twice changes nothing
@@ -780,7 +780,7 @@ test('a monthly budget applies from its month on, and later changes keep history
   L.setBudget(d, '2026-12', 40);
   assert.equal(L.budgetSummary(d, '2026-12').left, 40); // the planned $25 entry not counted
   assert.deepEqual(L.normalizeSettings({ monthlyBudget: { '2026-13': 5, abc: 3, '2027-02': '40', '2027-01': -5 }, budgetWarnPct: 500 }),
-    { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: { '2027-02': 40 }, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, notifyDays: 3, checkUpdates: true });
+    { lastBackupDownload: '', backupSnoozedUntil: '', monthlyBudget: { '2027-02': 40 }, budgetWarnPct: 80, countPlanned: true, theme: 'system', followUpDays: 90, deskDays: 60, notifyDays: 3, checkUpdates: true, savedFinds: [] });
 });
 
 test('a yearly budget from Pen Pal 2.1 becomes a monthly one', () => {
@@ -1090,4 +1090,226 @@ test('save bookkeeping is kept, and undo changes data but not which save the fil
   assert.deepEqual([back.rev, back.saveId, back.lineage], [5, 's5', ['s2', 's3', 's4']]);
   assert.equal(L.snapshot(back), snap);
   assert.equal(L.restoreSnapshot(snap, 9).rev, 9); // the older call style still works
+});
+
+// ---------- 2.5: richer directory, filters, saved searches, poem match, updates, quick add ----------
+const DIR2 = L.loadDirectory({
+  rev: 3,
+  checked: '2026-11-26',
+  journals: [
+    { id: 'a', name: 'Alpha', url: 'https://a.example', windows: [['11-01', '12-10']], fee: 0, simSubs: 'yes', pays: 'yes', payPerPoem: 50, replyDays: 60, format: ['print'], focus: ['black', 'south'], note: 'A.' },
+    { id: 'b', name: 'Bravo', url: 'https://b.example', yearRound: true, fee: 3, simSubs: 'no', pays: 'yes', paysNote: '$10', payPerPoem: 10, replyDays: 20, format: ['online'], focus: ['experimental'], note: 'B.', checked: '2026-10-01' },
+    { id: 'c', name: 'Charlie', url: 'https://c.example', windows: [['12-15', '01-31']], fee: 2, simSubs: 'yes', pays: 'no', format: ['print', 'online'], focus: ['narrative', 'florida', 'nope'], note: 'C.' },
+    { id: 'd', name: 'Delta', url: 'https://d.example', windows: [['03-01', '04-30']], fee: 0, simSubs: 'unknown', pays: 'yes', tags: ['online', 'Ohio'], note: 'D.' },
+    { id: 'a', name: 'Alpha again', note: 'duplicate id is dropped' },
+  ],
+});
+const T = '2026-11-26';
+
+test('directory entries carry format, focus, pay and their own checked date', () => {
+  assert.equal(DIR2.rev, 3);
+  assert.equal(DIR2.journals.length, 4);
+  const [a, b, c, d] = DIR2.journals;
+  assert.deepEqual(a.focus, ['black', 'south']);
+  assert.deepEqual(c.focus, ['florida', 'narrative'], 'unknown focus words are dropped, order follows the list');
+  assert.deepEqual(d.format, ['online'], 'older entries take print / online from their tags');
+  assert.deepEqual(d.tags, ['Ohio']);
+  assert.equal(a.checked, '2026-11-26');
+  assert.equal(b.checked, '2026-10-01');
+  assert.equal(a.payPerPoem, 50);
+  assert.equal(L.focusLabel('south'), 'The South');
+});
+
+test('the newer directory wins, and a broken download never replaces the one in the app', () => {
+  const app = { rev: 2, checked: '2026-11-01', journals: [{ id: 'x', name: 'X' }] };
+  assert.equal(L.pickDirectory(app, { rev: 3, checked: '2026-10-01', journals: [{ id: 'y', name: 'Y' }] }).source, 'update');
+  assert.equal(L.pickDirectory(app, { rev: 2, checked: '2026-11-20', journals: [{ id: 'y', name: 'Y' }] }).source, 'update');
+  assert.equal(L.pickDirectory(app, { rev: 1, checked: '2026-12-01', journals: [{ id: 'y', name: 'Y' }] }).source, 'app');
+  assert.equal(L.pickDirectory(app, { rev: 9, journals: [] }).source, 'app');
+  assert.equal(L.pickDirectory(app, null).dir.journals[0].id, 'x');
+  assert.equal(L.pickDirectory(app, 'garbage').source, 'app');
+});
+
+test('filters: when, fee, pay, reply time, format and focus', () => {
+  const d = L.emptyData();
+  const ids = (o) => L.searchDirectory(DIR2, d, o, T).map((r) => r.entry.id);
+  assert.deepEqual(ids({ when: 'open' }), ['a', 'b']);
+  assert.deepEqual(ids({ when: 'soon' }), ['a', 'c', 'b'], 'Charlie opens in 19 days');
+  assert.deepEqual(ids({ when: 'soon', within: 10 }), ['a', 'b']);
+  assert.deepEqual(ids({ when: 'closing', within: 14 }), ['a']);
+  assert.deepEqual(ids({ when: 'closing', within: 7 }), []);
+  assert.deepEqual(ids({ maxFee: 2, sort: 'name' }), ['a', 'c', 'd']);
+  assert.deepEqual(ids({ maxFee: 0, sort: 'name' }), ['a', 'd']);
+  assert.deepEqual(ids({ payMin: 20 }), ['a']);
+  assert.deepEqual(ids({ payMin: 5, sort: 'pay' }), ['a', 'b']);
+  assert.deepEqual(ids({ maxReply: 30 }), ['b']);
+  assert.deepEqual(ids({ format: 'print', sort: 'name' }), ['a', 'c']);
+  assert.deepEqual(ids({ focus: ['florida'] }), ['c']);
+  assert.deepEqual(ids({ focus: ['black', 'south'] }), ['a']);
+  assert.deepEqual(ids({ focus: ['black', 'florida'] }), [], 'every chosen focus has to match');
+  assert.deepEqual(ids({ q: 'south' }), ['a'], 'focus labels are searchable');
+  assert.equal(L.findFilterCount({ when: 'open', focus: ['black', 'south'], maxFee: 0, q: 'x', sort: 'pay' }), 4);
+  assert.equal(L.findFilterCount({}), 0);
+});
+
+test('sorting the directory', () => {
+  const d = L.emptyData();
+  const ids = (sort) => L.searchDirectory(DIR2, d, { sort }, T).map((r) => r.entry.id);
+  assert.deepEqual(ids('smart'), ['a', 'c', 'b', 'd'], 'open, opening soon, all year, closed');
+  assert.deepEqual(ids('closing'), ['a', 'c', 'd', 'b'], 'open by closing date, then by opening date, all-year last');
+  assert.deepEqual(ids('reply'), ['b', 'a', 'c', 'd']);
+  assert.deepEqual(ids('pay'), ['a', 'b', 'd', 'c'], 'pays without a known amount comes after known amounts');
+  assert.deepEqual(ids('fee'), ['a', 'd', 'c', 'b']);
+  assert.deepEqual(ids('name'), ['a', 'b', 'c', 'd']);
+});
+
+test('old search options keep working', () => {
+  const o = L.normalizeFindOpts({ openSoon: true, free: true, sim: true, bogus: 1 });
+  assert.equal(o.when, 'soon');
+  assert.equal(o.maxFee, 0);
+  assert.equal(o.sim, true);
+  assert.equal(o.sort, 'smart');
+  assert.equal(L.normalizeFindOpts({ within: 9999 }).within, 30);
+  assert.equal(L.normalizeFindOpts({ format: 'audio' }).format, '');
+});
+
+test('saved searches live in settings, replace by name, and survive a reload', () => {
+  const d = L.emptyData();
+  const f = L.saveFind(d, 'Free and open', { when: 'open', maxFee: 0, q: 'x' });
+  assert.ok(f.id);
+  L.saveFind(d, 'free AND open', { when: 'soon' });
+  assert.equal(d.settings.savedFinds.length, 1);
+  assert.equal(d.settings.savedFinds[0].opts.when, 'soon');
+  assert.equal(L.saveFind(d, '   ', {}), null);
+  for (let i = 0; i < 25; i++) L.saveFind(d, 'S' + i, {});
+  assert.equal(d.settings.savedFinds.length, 20);
+  const again = L.normalize(JSON.parse(JSON.stringify(d)));
+  assert.equal(again.settings.savedFinds.length, 20);
+  assert.equal(again.settings.savedFinds[19].name, 'S24');
+  L.removeFind(again, again.settings.savedFinds[0].id);
+  assert.equal(again.settings.savedFinds.length, 19);
+  assert.deepEqual(L.normalize({ settings: { savedFinds: [{ name: '' }, 'x', { name: 'Ok', opts: { sort: 'pay' } }] } }).settings.savedFinds.map((s) => s.opts.sort), ['pay']);
+});
+
+test('where can this poem go: open, unseen, and simultaneous-safe', () => {
+  const d = L.emptyData();
+  d.poems = [{ id: 'p1', title: 'Salt' }, { id: 'p2', title: 'Placed' }].map(L.normalizePoem);
+  const mine = L.dirToJournal(DIR2.journals[0], T, '');
+  const own = L.normalizeJournal({ id: 'own', name: 'Own Review', opens: '2026-11-01', closes: '2026-11-30', fee: 5, simSubs: 'yes' });
+  const shut = L.normalizeJournal({ id: 'shut', name: 'Shut Review', opens: '2026-03-01', closes: '2026-04-01' });
+  d.journals = [mine, own, shut];
+  d.submissions = [
+    { id: 's1', poemIds: ['p1'], journalId: mine.id, sentDate: '2026-11-02' },
+    { id: 's2', poemIds: ['p2'], journalId: own.id, sentDate: '2026-10-01', status: 'accepted', acceptedPoemIds: ['p2'] },
+  ].map(L.normalizeSubmission);
+  const m = L.poemMatches(d, DIR2, 'p1', T);
+  assert.equal(m.out, 1);
+  assert.deepEqual(m.items.map((i) => i.name), ['Own Review', 'Charlie']);
+  assert.equal(m.hidden.seen, 1, 'Alpha already has it');
+  assert.equal(m.hidden.noSim, 1, 'Bravo takes no simultaneous submissions and the poem is out');
+  assert.equal(m.hidden.closed, 2, 'Shut Review and Delta are closed');
+  assert.ok(m.items[0].notes.some((n) => n.includes('waiting there')) === false);
+  assert.equal(m.items[0].mine.id, 'own');
+  assert.equal(m.items[1].entry.id, 'c');
+  // once nothing is out, Bravo comes back
+  d.submissions[0].status = 'rejected';
+  const m2 = L.poemMatches(d, DIR2, 'p1', T);
+  assert.ok(m2.items.some((i) => i.name === 'Bravo'));
+  assert.equal(m2.hidden.noSim, 0);
+  // free only
+  assert.deepEqual(L.poemMatches(d, DIR2, 'p1', T, { free: true }).items.map((i) => i.name), []);
+  // placed poems go nowhere
+  const placed = L.poemMatches(d, DIR2, 'p2', T);
+  assert.equal(placed.placed, true);
+  assert.equal(placed.items.length, 0);
+  // budget note
+  L.setBudget(d, '2026-11', 4);
+  assert.ok(L.poemMatches(d, DIR2, 'p1', T).items.find((i) => i.name === 'Own Review').notes.some((n) => n.includes('budget')));
+});
+
+test('newer directory details are offered, never forced, and can be taken or kept', () => {
+  const d = L.emptyData();
+  const old = L.normalizeDirEntry({ id: 'k', name: 'K', url: 'https://k.example', windows: [['09-01', '09-30']], fee: 0, simSubs: 'yes', note: 'n' }, '2026-01-01');
+  const j = L.dirToJournal(old, '2026-02-01', '2026-01-01');
+  j.notes = 'my own notes';
+  j.notify = true;
+  d.journals.push(j);
+  assert.deepEqual(L.dirChanges(j, old), [], 'same check date: nothing to offer');
+  const fresh = L.normalizeDirEntry({ id: 'k', name: 'K', url: 'https://k.example', windows: [['10-01', '10-31']], fee: 3, simSubs: 'unknown', note: 'n2', checked: '2026-11-20' });
+  const ch = L.dirChanges(j, fresh);
+  assert.deepEqual(ch.map((c) => c.field), ['windows', 'fee'], 'unknown values in the directory never replace yours');
+  assert.equal(ch[1].theirs, '$3');
+  assert.equal(ch[0].mine, 'Sep 1 to Sep 30');
+  assert.equal(L.applyDirChanges(d, j.id, fresh, '2026-11-26'), true);
+  assert.equal(j.fee, 3);
+  assert.equal(L.currentWindow(j, '2026-11-26').opens, '2027-10-01');
+  assert.equal(j.notes, 'my own notes');
+  assert.equal(j.notify, true);
+  assert.equal(j.checked, '2026-11-20');
+  assert.deepEqual(L.dirChanges(j, fresh), []);
+  // keep mine
+  const newer = Object.assign({}, fresh, { fee: 4, checked: '2026-12-01' });
+  assert.equal(L.dirChanges(j, newer).length, 1);
+  L.dismissDirChanges(d, j.id, newer);
+  assert.deepEqual(L.dirChanges(j, newer), []);
+  assert.equal(j.fee, 3);
+});
+
+test('quick add reads a guidelines page', () => {
+  const page = 'Submissions | The Gulf Review - A journal of the coast. Our reading period runs from September 1 through November 30, ' +
+    'and again January 15 – March 1, 2027. Please submit up to five poems in a single document. There is a $3 reading fee to cover Submittable. ' +
+    'Simultaneous submissions are welcome; please withdraw if accepted elsewhere. We pay $40 per poem on publication. ' +
+    'We do not accept previously published work. We aim to respond within three months.';
+  const g = L.parseGuidelines(page, 'Submissions | The Gulf Review');
+  assert.equal(g.name, 'The Gulf Review');
+  assert.deepEqual(g.windows, [{ opens: '09-01', closes: '11-30' }, { opens: '01-15', closes: '03-01' }]);
+  assert.equal(g.fee, 3);
+  assert.equal(g.maxPoems, 5);
+  assert.equal(g.simSubs, 'yes');
+  assert.equal(g.pays, 'yes');
+  assert.equal(g.paysNote, '$40 per poem');
+  assert.equal(g.reprints, 'no');
+  assert.equal(g.replyDays, 90);
+  assert.deepEqual(g.found, ['reading period', 'fee', 'poems per submission', 'simultaneous submissions', 'payment', 'reprints', 'reply time']);
+  const j = L.journalFromGuidelines(g, 'https://gulf.example/submit', '2026-11-26');
+  assert.equal(j.name, 'The Gulf Review');
+  assert.equal(j.repeat, 'yearly');
+  assert.deepEqual(j.extraWindows, [{ opens: '01-15', closes: '03-01' }]);
+  assert.equal(j.fee, 3);
+  assert.equal(j.checked, '2026-11-26');
+  assert.equal(j.dirId, '');
+
+  const free = L.parseGuidelines('We read year-round. There is no submission fee. Send 3-5 poems. We do not accept simultaneous submissions. ' +
+    'Unfortunately we are unable to pay contributors at this time. Reprints are welcome. Expect a reply in 6-8 weeks.', 'Moon Mag');
+  assert.equal(free.yearRound, true);
+  assert.equal(free.fee, 0);
+  assert.equal(free.maxPoems, 5);
+  assert.equal(free.simSubs, 'no');
+  assert.equal(free.pays, 'no');
+  assert.equal(free.reprints, 'yes');
+  assert.equal(free.replyDays, 56);
+  assert.equal(free.name, 'Moon Mag');
+
+  const month = L.parseGuidelines('We are open for poetry during the month of September only. Contributors receive $25.', '');
+  assert.deepEqual(month.windows, [{ opens: '09-01', closes: '09-30' }]);
+  assert.equal(month.paysNote, '$25');
+  const blank = L.parseGuidelines('', '');
+  assert.deepEqual(blank.found, []);
+  assert.equal(blank.fee, null);
+  // a pay amount alone is not a fee
+  assert.equal(L.parseGuidelines('We pay $50 per poem.', '').fee, null);
+  // day-first dates
+  assert.deepEqual(L.parseGuidelines('Open from 1 March to 31 May.', '').windows, [{ opens: '03-01', closes: '05-31' }]);
+});
+
+test('the directory can be narrowed to journals that could take one poem', () => {
+  const d = L.emptyData();
+  d.poems = [{ id: 'p1', title: 'Salt' }].map(L.normalizePoem);
+  const alpha = L.dirToJournal(DIR2.journals[0], T, '');
+  d.journals = [alpha];
+  d.submissions = [{ id: 's', poemIds: ['p1'], journalId: alpha.id, sentDate: '2026-11-01' }].map(L.normalizeSubmission);
+  const ids = (o) => L.searchDirectory(DIR2, d, Object.assign({ sort: 'name' }, o), T).map((r) => r.entry.id);
+  assert.deepEqual(ids({}), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(ids({ poemId: 'p1' }), ['c', 'd'], 'Alpha saw it, Bravo takes no simultaneous submissions while it is out');
+  assert.deepEqual(ids({ poemId: 'nope' }), []);
 });

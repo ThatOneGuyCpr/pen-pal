@@ -15,7 +15,7 @@
   let lastSnap = '';
   const ui = {
     subFilter: 'pending', poemFilter: 'all', poemQuery: '',
-    findQuery: '', findSel: '', find: { openSoon: true, sim: false, free: false, pays: false, reprints: false, notSent: false },
+    findQuery: '', findSel: '', findPoem: '', findMore: false, find: L.normalizeFindOpts({ when: 'soon' }),
     budgetMonth: L.todayLocal().slice(0, 7),
   };
 
@@ -453,6 +453,7 @@
       rows.map(({ p, state }) =>
         '<tr><td><b>' + esc(p.title) + '</b></td><td>' + chip(state, POEM_LABEL[state]) + '</td><td>' + poemWhere(p, state) + '</td><td class="sub">' + esc(p.notes) + '</td><td class="nowrap"><div class="btnrow">' +
         (state === 'published' ? '' : '<button class="small" data-act="new-sub" data-poem="' + esc(p.id) + '">Send out</button>') +
+        (state === 'published' ? '' : '<button class="small" data-act="poem-history" data-id="' + esc(p.id) + '">Where can it go?</button>') +
         '<button class="small" data-act="poem-history" data-id="' + esc(p.id) + '">History</button>' +
         '<button class="small" data-act="edit-poem" data-id="' + esc(p.id) + '">Edit</button></div></td></tr>').join('') + '</tbody></table>';
     return html;
@@ -468,36 +469,73 @@
   const shortDate = (d) => new Date(d + 'T00:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
   const feeText = (fee) => (fee === null ? 'Not confirmed' : fee === 0 ? 'Free' : money(fee));
   const YN_TEXT = { yes: 'Yes', no: 'No', unknown: 'Not confirmed' };
-  const FIND_TOGGLES = [['openSoon', 'Open now or soon'], ['sim', 'Takes simultaneous'], ['free', 'No fee'], ['pays', 'Pays writers'], ['reprints', 'Takes reprints'], ['notSent', 'Not sent to yet']];
+  const FIND_TOGGLES = [['free', 'No fee'], ['sim', 'Takes simultaneous'], ['pays', 'Pays writers'], ['reprints', 'Takes reprints'], ['notSent', 'Not sent to yet']];
+  const WHEN_LABEL = { any: 'Any time', open: 'Open now', soon: 'Open or opening soon', closing: 'Closing soon' };
+  const SORT_LABEL = { smart: 'Best order', closing: 'Closing soonest', reply: 'Fastest reply', pay: 'Highest pay', fee: 'Lowest fee', name: 'A to Z' };
+  const REPLY_CHOICES = [[30, 'a month'], [60, '2 months'], [90, '3 months'], [180, '6 months']];
+  const toggleOn = (o, k) => (k === 'free' ? o.maxFee === 0 : !!o[k]);
+  const dirStatus = { checking: false, source: 'app', lastCheck: '', error: '', updated: false };
+  const payText = (e) => (e.pays === 'yes' ? (e.paysNote || (e.payPerPoem ? '$' + e.payPerPoem + ' per poem' : 'Yes')) : e.pays === 'no' ? (e.paysNote || 'No') : 'Not confirmed');
   function viewFind() {
     const t = today();
-    const res = L.searchDirectory(dir, data, Object.assign({ q: ui.findQuery }, ui.find), t);
+    const o = L.normalizeFindOpts(ui.find);
+    const res = L.searchDirectory(dir, data, Object.assign({}, o, { q: ui.findQuery, poemId: ui.findPoem }), t);
     if (!res.some((r) => r.entry.id === ui.findSel)) ui.findSel = res.length ? res[0].entry.id : '';
     const links = L.searchLinks(ui.findQuery);
-    let html = pageHead(dir.checked ? 'Directory checked ' + fmtDate(dir.checked) + ', ' + dir.journals.length + ' journals' : 'Directory', 'Find journals',
-      '<button data-act="add-journal">Add one by hand</button>');
+    const n = L.findFilterCount(o);
+    const nMore = (o.maxFee !== null && o.maxFee !== 0) + (o.payMin > 0) + (o.maxReply !== null) + !!o.format + o.focus.length + !!ui.findPoem;
+    const kicker = (dir.checked ? 'Directory checked ' + fmtDate(dir.checked) + ', ' + dir.journals.length + ' journals' : 'Directory') +
+      (dirStatus.checking ? '. Checking for a newer list…' : dirStatus.updated ? '. Updated just now' : '');
+    let html = pageHead(kicker, 'Find journals',
+      '<button data-act="dir-check" title="Look for a newer directory now"' + (dirStatus.checking ? ' disabled' : '') + '>Check for new journals</button>' +
+      '<button data-act="quick-add">Add from a link</button><button data-act="add-journal">Add one by hand</button>');
+    if (dirStatus.error) html += '<div class="card alert" style="padding:10px 14px">' + esc(dirStatus.error) + ' The list you have still works.</div>';
     if (dir.journals.length && L.dirIsStale(dir, t)) html += '<div class="card alert">These directory details were checked more than six months ago. Reading periods and fees change, so confirm on each journal\'s site.</div>';
+    const saved = data.settings.savedFinds;
+    const ready = data.poems.filter((p) => ['ready', 'out'].includes(L.poemState(data, p))).sort((a, b) => a.title.localeCompare(b.title));
     html += '<label class="searchbox">' + icon('find', 19) + '<span class="sr" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Search journals</span>' +
       '<input id="findQuery" type="search" placeholder="Search by name, place or kind of journal" value="' + esc(ui.findQuery) + '"><span class="sub" style="white-space:nowrap">' + res.length + ' match' + (res.length === 1 ? '' : 'es') + '</span></label>' +
-      '<div class="btnrow">' + FIND_TOGGLES.map(([k, label]) => '<button class="toggle" data-act="find-toggle" data-key="' + k + '" aria-pressed="' + (ui.find[k] ? 'true' : 'false') + '">' + label + '</button>').join('') + '</div>';
+      '<div class="findbar">' +
+      '<div class="seg" role="group" aria-label="When">' + L.FIND_WHEN.map((w) => '<button class="toggle" data-act="find-when" data-when="' + w + '" aria-pressed="' + (o.when === w) + '">' + WHEN_LABEL[w] + '</button>').join('') + '</div>' +
+      (o.when === 'soon' || o.when === 'closing' ? '<label class="inline">within <input id="findWithin" type="number" min="1" max="365" value="' + o.within + '"> days</label>' : '') +
+      '<span class="grow"></span><label class="inline">Sort <select id="findSort">' + L.FIND_SORTS.map((s) => '<option value="' + s + '"' + (o.sort === s ? ' selected' : '') + '>' + SORT_LABEL[s] + '</option>').join('') + '</select></label></div>' +
+      '<div class="btnrow">' + FIND_TOGGLES.map(([k, label]) => '<button class="toggle" data-act="find-toggle" data-key="' + k + '" aria-pressed="' + toggleOn(o, k) + '">' + label + '</button>').join('') + '</div>' +
+      '<details class="morefilters"' + (ui.findMore ? ' open' : '') + '><summary>More filters' + (nMore ? ' <span class="count">' + nMore + ' on</span>' : '') + '</summary>' +
+      '<div class="filtergrid">' +
+      '<label>Fee at most ($)<input id="findMaxFee" type="number" min="0" step="0.5" placeholder="Any" value="' + (o.maxFee === null ? '' : o.maxFee) + '"></label>' +
+      '<label>Pays at least ($ per poem)<input id="findPayMin" type="number" min="0" step="5" placeholder="Any" value="' + (o.payMin || '') + '"></label>' +
+      '<label>Usually replies within<select id="findReply"><option value="">Any time</option>' + REPLY_CHOICES.map(([d, l]) => '<option value="' + d + '"' + (o.maxReply === d ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
+      '<label>Print or online<select id="findFormat"><option value="">Either</option><option value="print"' + (o.format === 'print' ? ' selected' : '') + '>Print</option><option value="online"' + (o.format === 'online' ? ' selected' : '') + '>Online</option></select></label>' +
+      '<label>For a poem<select id="findPoem"><option value="">Any poem</option>' + ready.map((p) => '<option value="' + esc(p.id) + '"' + (ui.findPoem === p.id ? ' selected' : '') + '>' + esc(p.title) + '</option>').join('') + '</select></label>' +
+      '</div><div class="sub" style="margin:10px 0 6px">Especially for (every one you pick has to match)</div>' +
+      '<div class="btnrow">' + L.FOCUS.map(([k, label]) => '<button class="toggle" data-act="find-focus" data-key="' + k + '" aria-pressed="' + o.focus.includes(k) + '">' + esc(label) + '</button>').join('') + '</div>' +
+      '<p class="hint" style="margin:10px 0 0">Reply times, pay and focus only count where the journal states them, so turning these on hides journals that do not say.</p></details>' +
+      '<div class="savedrow">' + (saved.length ? '<span class="sub">Saved:</span>' + saved.map((f) => '<span class="savedchip"><button type="button" class="link" data-act="find-load" data-id="' + esc(f.id) + '">' + esc(f.name) + '</button>' +
+        '<button type="button" class="x" data-act="find-unsave" data-id="' + esc(f.id) + '" aria-label="Remove saved search ' + esc(f.name) + '">×</button></span>').join('') : '') +
+      '<span class="grow"></span>' + (n || ui.findQuery || ui.findPoem ? '<button class="small quiet" data-act="find-clear">Clear</button>' : '') +
+      '<button class="small" data-act="find-save">Save this search</button></div>';
+    const fitsName = ui.findPoem && L.poemById(data, ui.findPoem) ? L.poemById(data, ui.findPoem).title : '';
     const list = res.length
       ? '<ul class="results">' + res.map((r) => {
         const e = r.entry;
         const chips = [stateChip(r.state), chip('plain', feeText(e.fee) === 'Not confirmed' ? 'Fee: check' : feeText(e.fee))];
         if (e.simSubs === 'yes') chips.push(chip('plain', 'Sim subs OK'));
         if (e.simSubs === 'no') chips.push(chip('red', 'No sim subs'));
-        if (e.pays === 'yes') chips.push(chip('plain', e.paysNote ? 'Pays ' + e.paysNote : 'Pays'));
+        if (e.pays === 'yes') chips.push(chip('plain', e.payPerPoem ? 'Pays $' + e.payPerPoem + '+' : 'Pays'));
+        if (e.replyDays) chips.push(chip('plain', '~' + e.replyDays + ' days'));
+        e.focus.slice(0, 2).forEach((k) => chips.push(chip('blue', L.focusLabel(k))));
         return '<li><button class="result" data-act="find-pick" data-id="' + esc(e.id) + '" aria-pressed="' + (e.id === ui.findSel ? 'true' : 'false') + '">' +
           '<span class="t"><span>' + esc(e.name) + '</span>' + (r.mine ? '<span class="mine">In your journals</span>' : '') + '</span>' +
           '<span class="l">' + esc(e.note.split('. ')[0].replace(/\.$/, '')) + '.</span><span class="chips">' + chips.join('') + '</span></button></li>';
       }).join('') + '</ul>'
-      : '<div class="empty">No journals match. Try fewer filters or other words.</div>';
+      : '<div class="empty">' + (fitsName ? 'No journals here fit ' + esc(q(fitsName)) + ' with these filters.' : 'No journals match. Try fewer filters or other words.') + '</div>';
     const outside = '<section class="card" style="margin-top:14px"><h3>Not finding it here?</h3><p class="hint">The big databases have thousands more. These open a search on their sites' +
-      (ui.findQuery ? ' for <b>' + esc(ui.findQuery) + '</b>' : '') + '. When you find one, add it with "Add one by hand".</p><div class="btnrow">' +
+      (ui.findQuery ? ' for <b>' + esc(ui.findQuery) + '</b>' : '') + '. When you find one, copy its guidelines link and use "Add from a link".</p><div class="btnrow">' +
       '<a class="btn small" href="' + esc(links.chillSubs) + '" target="_blank" rel="noopener noreferrer">Search Chill Subs</a>' +
       '<a class="btn small" href="' + esc(links.pw) + '" target="_blank" rel="noopener noreferrer">Search Poets &amp; Writers</a>' +
       '<a class="btn small quiet" href="' + esc(links.pwOpen) + '" target="_blank" rel="noopener noreferrer">Open reading periods list</a></div></section>';
-    return html + '<div class="find"><div>' + list + outside + '</div><div>' + findDetail(res.find((r) => r.entry.id === ui.findSel), t) + '</div></div>';
+    return html + (fitsName ? '<p class="hint" style="margin:10px 0 0">Showing journals that have not seen ' + esc(q(fitsName)) + (L.pendingSubsFor(data, ui.findPoem).length ? ' and take simultaneous submissions or might' : '') + '.</p>' : '') +
+      '<div class="find"><div>' + list + outside + '</div><div>' + findDetail(res.find((r) => r.entry.id === ui.findSel), t) + '</div></div>';
   }
   function findDetail(r, t) {
     if (!r) return '';
@@ -508,22 +546,94 @@
     const hist = r.mine
       ? (r.sent ? 'You have sent here ' + r.sent + ' time' + (r.sent === 1 ? '' : 's') + '. ' : 'Nothing sent here yet. ') + unseen.length + ' of your ready poems have not been seen by this journal.'
       : 'Not in your journals yet. ' + unseen.length + ' ready poem' + (unseen.length === 1 ? '' : 's') + ' could go here.';
+    const changes = r.mine ? L.dirChanges(r.mine, e) : [];
+    const kicker = e.focus.map(L.focusLabel).concat(e.format.map((f) => (f === 'print' ? 'Print' : 'Online')), e.tags).join(' · ') || 'Poetry';
     return '<section class="card detail">' +
-      '<span class="kicker" style="display:block;font:500 12px var(--mono);color:var(--muted);letter-spacing:.04em;text-transform:uppercase">' + esc(e.tags.join(' · ') || 'Poetry') + '</span>' +
+      '<span class="kicker" style="display:block;font:500 12px var(--mono);color:var(--muted);letter-spacing:.04em;text-transform:uppercase">' + esc(kicker) + '</span>' +
       '<h2 style="font-size:1.6rem;margin:6px 0 4px">' + esc(e.name) + '</h2>' +
       (safeUrl(e.url) ? '<a href="' + esc(e.url) + '" target="_blank" rel="noopener noreferrer" style="font-size:13.5px">' + esc(e.url.replace(/^https?:\/\//, '')) + '</a>' : '') +
       '<p style="margin:12px 0 6px;font-size:14px;color:var(--ink2)">' + esc(e.note) + '</p>' +
       '<div class="facts">' +
       [['Reading period', period], ['Fee', feeText(e.fee) + (e.feeNote ? '. ' + e.feeNote : '')], ['Poems per submission', e.maxPoems ? 'Up to ' + e.maxPoems : 'Not stated'],
-        ['Simultaneous', YN_TEXT[e.simSubs]], ['Pays', e.pays === 'yes' ? (e.paysNote || 'Yes') : e.pays === 'no' ? (e.paysNote || 'No') : 'Not confirmed'],
+        ['Simultaneous', YN_TEXT[e.simSubs]], ['Pays', payText(e)],
         ['Reprints', YN_TEXT[e.reprints]], ['Usual reply', e.replyDays ? 'About ' + e.replyDays + ' days' : 'Not stated'], ['Right now', stateChip(r.state)]]
         .map(([k, v]) => '<div class="fact"><b>' + k + '</b><span>' + (k === 'Right now' ? v : esc(v)) + '</span></div>').join('') + '</div>' +
+      (changes.length ? '<div class="dirchanges"><b>Newer details in the directory</b> <span class="sub">(checked ' + fmtDate(e.checked) + '). Your copy stays as it is unless you take them.</span>' +
+        '<table class="mini"><thead><tr><th></th><th>Yours</th><th>Directory</th></tr></thead><tbody>' + changes.map((c) => '<tr><th>' + esc(c.label) + '</th><td>' + esc(c.mine) + '</td><td>' + esc(c.theirs) + '</td></tr>').join('') + '</tbody></table>' +
+        '<div class="btnrow"><button class="small primary" data-act="dir-take" data-id="' + esc(e.id) + '">Use these details</button><button class="small" data-act="dir-keep" data-id="' + esc(e.id) + '">Keep mine</button></div></div>' : '') +
       '<div class="yourhist"><b>Your history here:</b> ' + esc(hist) + '</div>' +
       '<div class="btnrow" style="margin-top:16px">' +
-      (r.mine ? '<button class="primary" data-act="new-sub" data-journal="' + esc(r.mine.id) + '">Send poems</button><button data-act="edit-journal" data-id="' + esc(r.mine.id) + '">Your notes on it</button>' + (r.mine.alwaysOpen ? '' : bellButton(r.mine, true))
-        : '<button class="primary" data-act="find-add" data-id="' + esc(e.id) + '">Add to my journals</button>') +
+      (r.mine ? '<button class="primary" data-act="new-sub" data-journal="' + esc(r.mine.id) + '"' + (ui.findPoem ? ' data-poem="' + esc(ui.findPoem) + '"' : '') + '>Send poems</button><button data-act="edit-journal" data-id="' + esc(r.mine.id) + '">Your notes on it</button>' + (r.mine.alwaysOpen ? '' : bellButton(r.mine, true))
+        : '<button class="primary" data-act="find-add" data-id="' + esc(e.id) + '">Add to my journals</button>' +
+          (ui.findPoem ? '<button data-act="find-add-send" data-id="' + esc(e.id) + '" data-poem="' + esc(ui.findPoem) + '">Add and send ' + esc(q(L.poemById(data, ui.findPoem).title)) + '</button>' : '')) +
       (safeUrl(e.url) ? '<a class="btn quiet" href="' + esc(e.url) + '" target="_blank" rel="noopener noreferrer">Guidelines</a>' : '') + '</div>' +
-      '<p class="sub" style="margin:12px 0 0">Checked ' + (dir.checked ? fmtDate(dir.checked) : 'by hand') + '. Details change; read their guidelines before you send.</p></section>';
+      '<p class="sub" style="margin:12px 0 0">Checked ' + (e.checked ? fmtDate(e.checked) : 'by hand') + ' against the journal\'s own guidelines. Details change; read them before you send.</p></section>';
+  }
+  // Directory: the copy in the app, or a newer one Pen Pal downloaded (desktop: through the server).
+  async function loadDir() {
+    try {
+      const r = await fetch('/api/directory');
+      if (r.ok) {
+        const v = await r.json();
+        dir = L.loadDirectory(v.directory);
+        Object.assign(dirStatus, { source: v.source, lastCheck: v.lastCheck, error: '' });
+        return;
+      }
+    } catch (e) { /* older server: fall back to the file */ }
+    try { const d = await fetch('directory.json'); if (d.ok) dir = L.loadDirectory(await d.json()); } catch (e) { /* the app works without it */ }
+  }
+  async function checkDir(force) {
+    if (dirStatus.checking) return;
+    dirStatus.checking = true;
+    if (tab === 'find') render();
+    try {
+      const v = await putJSON('/api/directory/check', { force: !!force });
+      const before = dir.journals.length;
+      dir = L.loadDirectory(v.directory);
+      Object.assign(dirStatus, { source: v.source, lastCheck: v.lastCheck, error: force ? v.error : '', updated: !!v.updated });
+      if (v.updated) toast('The directory has been updated: ' + dir.journals.length + ' journals' + (dir.journals.length > before ? ', ' + (dir.journals.length - before) + ' new' : '') + '.');
+      else if (force && !v.error) toast('You already have the newest directory.');
+    } catch (e) {
+      if (force) dirStatus.error = 'Could not check for a newer directory: ' + e.message + '.';
+    }
+    dirStatus.checking = false;
+    if (tab === 'find') render();
+  }
+  // Quick add: read a journal's guidelines page (or pasted text) and open the journal form filled in.
+  function quickAddDialog() {
+    openDialog(
+      '<h2>Add a journal from its guidelines</h2>' +
+      '<p class="hint" style="margin-top:0">Paste the link to the journal\'s submission guidelines. Pen Pal reads the page and fills in what it can find: reading period, fee, poems per submission, simultaneous submissions, pay, reprints and reply time. You check everything before it is saved.</p>' +
+      '<label>Guidelines link<input name="url" type="url" placeholder="https://" maxlength="600"></label>' +
+      '<details><summary>Or paste the guidelines text</summary><label>Guidelines text<textarea name="text" rows="6" maxlength="200000" placeholder="Paste the submission guidelines here"></textarea></label></details>' +
+      '<div class="err" id="dlgErr" role="alert"></div><div class="actions"><span class="grow"></span><button type="button" data-close>Cancel</button><button class="primary" type="submit" value="read">Read it</button></div>',
+      (fd, action, form) => {
+        const url = String(fd.get('url') || '').trim();
+        const text = String(fd.get('text') || '').trim();
+        if (!url && !text) return setErr(form, 'Paste a link or the guidelines text.');
+        const btn = $('button[value=read]', form);
+        btn.disabled = true;
+        btn.textContent = 'Reading…';
+        const done = (title, body, finalUrl) => {
+          const g = L.parseGuidelines(body, title);
+          const j = L.journalFromGuidelines(g, L.cleanUrl(finalUrl || url), today());
+          $('#dlg').close();
+          journalDialog('', j, g.found.length
+            ? 'Found: ' + g.found.join(', ') + '. Check each one against the page before you save.'
+            : 'Pen Pal could not find the details on that page, so fill them in from the guidelines.');
+        };
+        if (text) { done('', text, url); return false; }
+        putJSON('/api/guidelines', { url }).then((res) => done(res.title, res.text, res.url), (err) => {
+          btn.disabled = false;
+          btn.textContent = 'Read it';
+          setErr(form, err.message + ' You can paste the guidelines text instead.');
+          const det = $('details', form);
+          if (det) det.open = true;
+        });
+        return false;
+      },
+      (form) => $('[name=url]', form).focus()
+    );
   }
 
   // ----- Fee budget
@@ -862,24 +972,56 @@
         : '<p class="hint">' + (info.desktop ? 'While Pen Pal is open, reminders show as Windows notifications. The installed PenPal.exe can also remind you while it is closed.' : 'Reminders show as Windows notifications in the PenPal.exe app.') + '</p>') +
       '<div class="btnrow"><button class="primary" data-act="save-notify-days">Save</button>' + (a && a.test_notification ? '<button data-act="test-notification">Send a test notification</button>' : '') + '</div></section>';
   }
-  function setupTitleBar() {
+  async function setupTitleBar() {
     if (!info.frameless || document.body.classList.contains('framed')) return;
+    const a = desktopApi();
+    if (!a) { window.addEventListener('pywebviewready', setupTitleBar, { once: true }); return; }
+    let mode = { mode: 'frameless', appRegion: false, snap: false };
+    try { if (a.win_mode) mode = await a.win_mode(); } catch (e) { /* older program: frameless */ }
+    if (mode.mode === 'standard' || document.body.classList.contains('framed')) return; // Windows' own title bar is showing
+    const native = mode.mode === 'native';
     document.body.classList.add('framed');
+    document.body.classList.toggle('nativeframe', native);
     $('#titlebar').hidden = false;
     $('#resizers').hidden = false;
+    const drag = $('#tbDrag');
     const setMax = (isMax) => {
       document.body.classList.toggle('maxed', !!isMax);
-      $('#tbDrag').classList.toggle('pywebview-drag-region', !isMax);
+      drag.classList.toggle('pywebview-drag-region', !native && !isMax);
       $('#tbMax').setAttribute('aria-label', isMax ? 'Restore' : 'Maximize');
       $('#tbMax').innerHTML = isMax
         ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="8.5" width="10" height="10" rx="1"/><path d="M8.5 8.5V5.5h10v10h-3"/></svg>'
         : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="13" height="13" rx="1"/></svg>';
     };
-    const toggleMax = async () => { const a = desktopApi(); if (a) setMax(await a.win_toggle_max()); };
-    $('#tbMin').addEventListener('click', () => { const a = desktopApi(); if (a) a.win_minimize(); });
-    $('#tbMax').addEventListener('click', toggleMax);
-    $('#tbDrag').addEventListener('dblclick', toggleMax);
-    $('#tbClose').addEventListener('click', () => { const a = desktopApi(); if (a) a.win_close(); });
+    const sync = async () => { try { setMax(await a.win_is_max()); } catch (e) { /* closing */ } };
+    const toggleMax = async () => setMax(await a.win_toggle_max());
+    $('#tbMin').addEventListener('click', () => a.win_minimize());
+    $('#tbMax').addEventListener('click', () => { clearTimeout(snapTimer); toggleMax(); });
+    $('#tbClose').addEventListener('click', () => a.win_close());
+    let snapTimer = null;
+    if (native) {
+      // Windows moves, snaps and maximizes from the title strip itself (CSS app-region: drag). If this
+      // WebView2 is too old for that, hand the drag to Windows' own move loop instead.
+      if (!mode.appRegion) {
+        drag.addEventListener('mousedown', (e) => { if (e.button === 0 && e.detail === 1) a.win_begin_move(); });
+        drag.addEventListener('dblclick', toggleMax);
+      }
+      // Hovering maximize shows Windows 11's Snap layouts, as on any other window.
+      if (mode.snap) {
+        $('#tbMax').addEventListener('mouseenter', () => { clearTimeout(snapTimer); snapTimer = setTimeout(() => a.win_snap_layouts(), 600); });
+        $('#tbMax').addEventListener('mouseleave', () => clearTimeout(snapTimer));
+      }
+      // The sides and bottom are Windows' own frame. The top edge is the page, so it starts Windows' sizing loop.
+      $('#resizers').addEventListener('pointerdown', (e) => {
+        const edge = { n: 'top', nw: 'topleft', ne: 'topright' }[e.target.dataset && e.target.dataset.edge];
+        if (edge && e.button === 0) { e.preventDefault(); a.win_begin_resize(edge); }
+      });
+      let t = null;
+      window.addEventListener('resize', () => { clearTimeout(t); t = setTimeout(sync, 120); });
+      sync();
+      return;
+    }
+    drag.addEventListener('dblclick', toggleMax);
     // Edges: drag to resize. A frameless window has no resize border of its own.
     let rs = null;
     const send = async () => {
@@ -887,13 +1029,12 @@
       rs.busy = true;
       const b = rs.next;
       rs.next = null;
-      try { await desktopApi().win_set_bounds(b[0], b[1], b[2], b[3]); } catch (e) { /* ignore */ }
+      try { await a.win_set_bounds(b[0], b[1], b[2], b[3]); } catch (e) { /* ignore */ }
       if (rs) { rs.busy = false; send(); }
     };
     $('#resizers').addEventListener('pointerdown', async (e) => {
       const edge = e.target.dataset && e.target.dataset.edge;
-      const a = desktopApi();
-      if (!edge || !a) return;
+      if (!edge) return;
       e.preventDefault();
       e.target.setPointerCapture(e.pointerId);
       rs = { edge, sx: e.screenX, sy: e.screenY, start: null, next: null, busy: false };
@@ -913,8 +1054,7 @@
     const end = () => { rs = null; };
     $('#resizers').addEventListener('pointerup', end);
     $('#resizers').addEventListener('pointercancel', end);
-    const sync = async () => { const a = desktopApi(); if (a && a.win_is_max) setMax(await a.win_is_max()); };
-    if (desktopApi()) sync(); else window.addEventListener('pywebviewready', sync, { once: true });
+    sync();
   }
 
   // ----- Journals
@@ -1119,11 +1259,12 @@
     );
   }
 
-  function journalDialog(id) {
-    const j = id ? L.journalById(data, id) : L.normalizeJournal({ id: 'new', name: '' });
+  function journalDialog(id, preset, note) {
+    const j = id ? L.journalById(data, id) : preset || L.normalizeJournal({ id: 'new', name: '' });
     if (!j) return;
     openDialog(
       '<h2>' + (id ? 'Edit journal' : 'Add journal') + '</h2>' +
+      (note ? '<p class="hint" style="margin-top:0">' + esc(note) + '</p>' : '') +
       '<label>Name<input name="name" required maxlength="300" value="' + esc(j.name) + '"></label>' +
       '<label>Website or submission page<input name="url" maxlength="600" placeholder="https://" value="' + esc(j.url) + '"></label>' +
       '<div class="row2"><label>Reading period opens<input type="date" name="opens" value="' + esc(j.opens) + '"></label>' +
@@ -1161,7 +1302,7 @@
         const fields = { name, url, opens: alwaysOpen ? '' : opens, closes: alwaysOpen ? '' : closes, repeat, alwaysOpen, notify: !!fd.get('notify'), extraWindows: repeat === 'yearly' ? ex.windows : [],
           replyDays: fd.get('replyDays'), pays: fd.get('pays'), reprints: fd.get('reprints'), fee: fd.get('fee'), maxPoems: fd.get('maxPoems'), simSubs: fd.get('simSubs'), notes: String(fd.get('notes')) };
         if (id) Object.assign(j, L.normalizeJournal(Object.assign({}, j, fields)));
-        else data.journals.push(L.normalizeJournal(Object.assign({ id: L.uid() }, fields)));
+        else data.journals.push(L.normalizeJournal(Object.assign({ id: L.uid(), checked: preset ? preset.checked : '' }, fields)));
         commit('Saved a journal');
         checkReminders();
         syncReminders();
@@ -1346,16 +1487,29 @@
             '<button class="small" type="button" data-act="copy-credit" data-id="' + esc(id) + '">Copy</button></div></div>' : '')
         : '<p class="hint">When a journal takes this poem, note the rights from the acceptance email here: what they bought, when it comes out, and when you can send it elsewhere as a reprint.</p>') +
       '</section>';
-    const next = L.nextTargets(data, id, t);
+    const m = L.poemMatches(data, dir, id, t);
+    const showAll = ui.matchAll;
+    ui.matchAll = false;
+    const shown = showAll ? m.items : m.items.slice(0, 8);
+    const hid = [m.hidden.seen ? plural(m.hidden.seen, 'journal') + ' already saw it' : '', m.hidden.noSim ? m.hidden.noSim + ' take no simultaneous submissions while it is out' : ''].filter(Boolean);
+    const whenTxt = (st) => (st.kind === 'always' ? 'open all year' : st.kind === 'open' ? (st.daysLeft === 0 ? 'closes today' : 'closes ' + rel(st.daysLeft)) : 'opens ' + rel(st.daysUntil));
+    const matches = state === 'published' || m.placed ? '' :
+      '<section class="card" style="margin:14px 0 0"><h2 style="margin:0">Where can it go?</h2><p class="sub" style="margin:4px 0 0">' + plural(m.items.length, 'journal') + ' open now or opening within 30 days, that have not seen it.</p>' +
+      (shown.length ? '<ul class="matches">' + shown.map((c) =>
+        '<li><div><span style="font-weight:600">' + esc(c.name) + '</span> <span class="sub">' + whenTxt(c.state) + ' · ' + esc(feeText(c.fee)) + (c.mine ? ' · in your journals' : '') + '</span>' +
+        (c.notes.length ? '<div class="sub">' + esc(c.notes.join(' ')) + '</div>' : '') + '</div>' +
+        (c.state.kind === 'soon' ? '' : c.mine ? '<button class="small" type="button" data-act="new-sub" data-poem="' + esc(id) + '" data-journal="' + esc(c.mine.id) + '">Send out</button>'
+          : '<button class="small" type="button" data-act="match-add-send" data-poem="' + esc(id) + '" data-id="' + esc(c.entry.id) + '">Add and send</button>') + '</li>').join('') + '</ul>'
+        : '<p class="hint">Nothing in your journals or the directory is open for it right now.</p>') +
+      (m.items.length > shown.length ? '<button class="small quiet" type="button" data-act="match-more" data-id="' + esc(id) + '">Show all ' + m.items.length + '</button>' : '') +
+      (hid.length ? '<p class="sub" style="margin:8px 0 0">Left out: ' + esc(hid.join('; ')) + '.</p>' : '') +
+      '<div class="btnrow" style="margin-top:10px"><button class="small" type="button" data-act="match-find" data-id="' + esc(id) + '">Filter these in Find journals</button></div></section>';
     let body = '<h2 style="margin-bottom:6px">' + esc(q(h.poem.title)) + '</h2><div class="btnrow" style="margin-bottom:14px">' + chip(state, POEM_LABEL[state]) + (where ? chip('plain', where) : '') +
       (r.exclusiveUntil && L.daysBetween(t, r.exclusiveUntil) >= 0 ? chip('blue', 'Exclusive for ' + L.daysBetween(t, r.exclusiveUntil) + ' more days') : '') + '</div>' +
       '<div class="poemgrid"><section class="card" style="margin:0"><div class="cardhead"><h2 style="margin:0">Where it has been</h2><span class="sub">' + h.seenBy.length + ' journal' + (h.seenBy.length === 1 ? '' : 's') + '</span></div>' + travels + '</section>' +
       '<div>' + rights +
       (h.manuscripts.length ? '<p style="margin:14px 0 0;font-size:14px"><b>In manuscripts:</b> ' + esc(h.manuscripts.map((m) => m.title).join(', ')) + '.</p>' : '') +
-      (next.length ? '<h3 style="margin-top:14px">Open now, not tried yet</h3><ul style="margin:0;padding-left:18px">' + next.slice(0, 6).map((n) =>
-        '<li>' + esc(n.journal.name) + ' <span class="sub">' + (n.daysLeft === null ? 'open all year' : n.daysLeft + ' days left') + '</span>' +
-        (n.blockedBySim ? ' <span class="sub">No simultaneous submissions, and this poem is out elsewhere.</span>'
-          : ' <button class="small" type="button" data-act="new-sub" data-poem="' + esc(id) + '" data-journal="' + esc(n.journal.id) + '">Send out</button>') + '</li>').join('') + '</ul>' : '') +
+      matches +
       '<p class="sub" style="margin-top:14px">Pen Pal keeps the title and your notes. The poem itself stays in your own files.</p></div></div>';
     openDialog(body + '<div class="actions"><span class="grow"></span><button class="primary" type="button" data-close>Close</button></div>', null, () => $('#dlg').classList.add('wide'));
   }
@@ -1829,7 +1983,76 @@
     },
     'edit-rights': (d) => rightsDialog(d.id),
     'copy-credit': (d) => { const p = L.poemById(data, d.id); if (p) copyText(p.rights.credit || L.suggestedCredit(data, p)); },
-    'find-toggle': (d) => { ui.find[d.key] = !ui.find[d.key]; render(); },
+    'find-toggle': (d) => {
+      if (d.key === 'free') ui.find.maxFee = ui.find.maxFee === 0 ? null : 0;
+      else ui.find[d.key] = !ui.find[d.key];
+      render();
+    },
+    'find-when': (d) => { ui.find.when = d.when; render(); },
+    'find-focus': (d) => {
+      const f = ui.find.focus;
+      ui.find.focus = f.includes(d.key) ? f.filter((k) => k !== d.key) : f.concat(d.key);
+      render();
+    },
+    'find-clear': () => { ui.find = L.normalizeFindOpts({ sort: ui.find.sort }); ui.findQuery = ''; ui.findPoem = ''; render(); },
+    'find-save': () => {
+      const name = prompt('Name this search', ui.findQuery || '');
+      if (name === null) return;
+      if (!L.saveFind(data, name, Object.assign({}, ui.find, { q: ui.findQuery }))) { toast('Give the search a name.'); return; }
+      commit('Saved a search');
+      toast('Saved. It is on the iPhone too once your data syncs.');
+    },
+    'find-load': (d) => {
+      const f = data.settings.savedFinds.find((x) => x.id === d.id);
+      if (!f) return;
+      ui.find = L.normalizeFindOpts(f.opts);
+      ui.findQuery = f.opts.q || '';
+      ui.findMore = L.findFilterCount(f.opts) > 0 && (f.opts.focus.length > 0 || f.opts.maxReply !== null || !!f.opts.format || !!f.opts.payMin);
+      render();
+    },
+    'find-unsave': (d) => {
+      const f = data.settings.savedFinds.find((x) => x.id === d.id);
+      if (!f || !confirm('Remove the saved search "' + f.name + '"?')) return;
+      L.removeFind(data, d.id);
+      commit('Removed a saved search');
+    },
+    'find-add-send': (d) => {
+      const e = dir.journals.find((x) => x.id === d.id);
+      if (!e) return;
+      const j = L.dirToJournal(e, today(), dir.checked);
+      data.journals.push(j);
+      commit('Added ' + e.name);
+      subDialog(null, { poemId: d.poem, journalId: j.id });
+    },
+    'dir-check': () => checkDir(true),
+    'dir-take': (d) => {
+      const e = dir.journals.find((x) => x.id === d.id);
+      const mine = e && L.searchDirectory({ journals: [e] }, data, { when: 'any' }, today())[0];
+      if (!mine || !mine.mine) return;
+      L.applyDirChanges(data, mine.mine.id, e, today());
+      commit('Took the directory\'s details for ' + e.name);
+      checkReminders();
+      syncReminders();
+      toast('Updated your copy of ' + e.name);
+    },
+    'dir-keep': (d) => {
+      const e = dir.journals.find((x) => x.id === d.id);
+      const mine = e && L.searchDirectory({ journals: [e] }, data, { when: 'any' }, today())[0];
+      if (!mine || !mine.mine) return;
+      L.dismissDirChanges(data, mine.mine.id, e);
+      commit('Kept your details for ' + e.name);
+    },
+    'quick-add': () => quickAddDialog(),
+    'match-add-send': (d) => {
+      const e = dir.journals.find((x) => x.id === d.id);
+      if (!e) return;
+      const j = L.dirToJournal(e, today(), dir.checked);
+      data.journals.push(j);
+      commit('Added ' + e.name);
+      subDialog(null, { poemId: d.poem, journalId: j.id });
+    },
+    'match-more': (d) => { ui.matchAll = true; poemHistoryDialog(d.id); },
+    'match-find': (d) => { $('#dlg').close(); ui.findPoem = d.id; ui.findMore = true; tab = 'find'; render(); $('#view').focus(); },
     'find-pick': (d) => { ui.findSel = d.id; render(); const el = document.querySelector('.detail'); if (el && window.innerWidth <= 900) el.scrollIntoView({ block: 'start' }); },
     'find-add': (d) => {
       const e = dir.journals.find((x) => x.id === d.id);
@@ -1907,6 +2130,16 @@
     if (b && actions[b.dataset.act]) actions[b.dataset.act](b.dataset);
   });
   document.addEventListener('change', (e) => {
+    const findNum = { findWithin: 'within', findMaxFee: 'maxFee', findPayMin: 'payMin', findReply: 'maxReply' }[e.target.id];
+    if (findNum) {
+      const v = e.target.value === '' ? null : Number(e.target.value);
+      ui.find = L.normalizeFindOpts(Object.assign({}, ui.find, { [findNum]: v }));
+      render();
+      return;
+    }
+    if (e.target.id === 'findSort') { ui.find.sort = e.target.value; render(); return; }
+    if (e.target.id === 'findFormat') { ui.find.format = e.target.value; render(); return; }
+    if (e.target.id === 'findPoem') { ui.findPoem = e.target.value; render(); return; }
     if (e.target.id === 'subFilter') { ui.subFilter = e.target.value; render(); }
     else if (e.target.id === 'poemFilter') { ui.poemFilter = e.target.value; render(); }
     else if (e.target.name === 'theme') {
@@ -1950,6 +2183,9 @@
       });
     }
   });
+  document.addEventListener('toggle', (e) => {
+    if (e.target.classList && e.target.classList.contains('morefilters')) ui.findMore = e.target.open;
+  }, true);
   document.addEventListener('input', (e) => {
     if (e.target.id === 'findQuery') {
       ui.findQuery = e.target.value;
@@ -1976,7 +2212,7 @@
       if (!r.ok) throw new Error(body.error || r.status);
       data = L.normalize(body);
       lastSnap = L.snapshot(data);
-      try { const d = await fetch('directory.json'); if (d.ok) dir = L.loadDirectory(await d.json()); } catch (e) { /* the app works without it */ }
+      await loadDir();
       try { const i = await fetch('/api/info'); if (i.ok) info = await i.json(); } catch (e) { /* optional */ }
       setStatus(savedLabel());
       render();
@@ -1988,6 +2224,7 @@
       window.addEventListener('focus', watchFile);
       document.addEventListener('visibilitychange', watchFile);
       if (data.settings.checkUpdates) checkForUpdates(false, true);
+      setTimeout(() => checkDir(false), 4000); // at most once a day; the server keeps track
     } catch (e) {
       $('#view').innerHTML = '<div class="card alert"><h2>Could not load your data</h2><p>' + esc(e.message) +
         '</p><p>Nothing has been changed. If Pen Pal was closed in the background, start it again.</p></div>';

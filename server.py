@@ -9,16 +9,21 @@ Usage:  python server.py [--port 8765] [--no-browser]
 """
 import argparse
 import datetime
+import html.parser
+import ipaddress
 import json
 import os
 import platform
 import re
 import shutil
+import socket
 import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -26,7 +31,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 APP_NAME = "Pen Pal"
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 
 
 def frozen():
@@ -68,6 +73,7 @@ MAX_BODY = 2 * 1024 * 1024  # 2 MB is far more than a poetry tracker needs
 KEEP_BACKUPS = 14
 DESKTOP = False  # set by penpal.py when the page runs in its own window
 FRAMELESS = False  # set by penpal.py when the window uses Pen Pal's own title bar
+NATIVE_FRAME = False  # set by penpal.py: that title bar sits in a real Windows frame (nativeframe.py)
 RESTART_HOOK = None  # set by penpal.py: closes the window after an update has been swapped in
 TITLE_BARS = ("custom", "windows")
 QUIET_OK = False  # the desktop app sets this so its log only gets failed requests
@@ -264,6 +270,187 @@ def update_check(force=False):
     res["canInstall"] = bool(can_install() and res.get("hasAsset"))
     res["download"] = DOWNLOADER.snapshot()
     return res
+
+
+# ---- the journal directory: the copy inside the app, plus newer ones downloaded from GitHub ----
+DIRECTORY_URL = os.environ.get("PENPAL_DIRECTORY_URL") or "https://raw.githubusercontent.com/%s/main/public/directory.json" % updater.REPO
+DIRECTORY_CACHE = "directory-update.json"  # in MACHINE_DIR, next to settings.json
+DIRECTORY_STATE = "directory-check.json"   # when this computer last looked, and what went wrong
+DIRECTORY_MAX = 4 * 1024 * 1024
+DIR_LOCK = threading.Lock()
+
+
+def _read_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def valid_directory(doc):
+    """A directory worth using: at least one journal, each with an id and a name."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("journals"), list) or not doc["journals"]:
+        return False
+    rev = doc.get("rev", 0)
+    if not isinstance(rev, int) or isinstance(rev, bool):
+        return False
+    return all(isinstance(j, dict) and isinstance(j.get("id"), str) and j["id"] and isinstance(j.get("name"), str) and j["name"].strip()
+               for j in doc["journals"])
+
+
+def _dir_rank(doc):
+    return (doc.get("rev", 0), str(doc.get("checked") or ""))
+
+
+def directory_view():
+    """The newest good directory this computer has. Never touches the network."""
+    bundled = _read_json(os.path.join(PUBLIC, "directory.json"))
+    if not valid_directory(bundled):
+        bundled = {"rev": 0, "checked": "", "journals": []}
+    cached = _read_json(os.path.join(MACHINE_DIR, DIRECTORY_CACHE))
+    state = _read_json(os.path.join(MACHINE_DIR, DIRECTORY_STATE)) or {}
+    use_cache = valid_directory(cached) and _dir_rank(cached) > _dir_rank(bundled)
+    return {"directory": cached if use_cache else bundled, "source": "update" if use_cache else "app",
+            "lastCheck": str(state.get("at") or ""), "error": str(state.get("error") or "")}
+
+
+def _save_dir_state(error):
+    st = {"at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "error": error}
+    try:
+        save_data(st, os.path.join(MACHINE_DIR, DIRECTORY_STATE))
+    except OSError:
+        pass
+
+
+def directory_check(force=False, timeout=15):
+    """Look on GitHub for a newer directory (at most every 20 hours unless forced).
+    Returns directory_view() plus "updated": True when a newer one was saved."""
+    with DIR_LOCK:
+        view = directory_view()
+        if not force and view["lastCheck"]:
+            try:
+                last = datetime.datetime.fromisoformat(view["lastCheck"])
+                if (datetime.datetime.now().astimezone() - last).total_seconds() < 20 * 3600:
+                    return dict(view, updated=False)
+            except ValueError:
+                pass
+        try:
+            req = urllib.request.Request(DIRECTORY_URL, headers={"User-Agent": updater.USER_AGENT, "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310  (fixed https GitHub URL)
+                body = r.read(DIRECTORY_MAX + 1)
+            if len(body) > DIRECTORY_MAX:
+                raise ValueError("the directory file is too large")
+            doc = json.loads(body.decode("utf-8"))
+            if not valid_directory(doc):
+                raise ValueError("the downloaded directory did not look right")
+        except Exception as e:  # noqa: BLE001
+            _save_dir_state("Could not check for a newer directory: %s" % e)
+            return dict(directory_view(), updated=False)
+        updated = _dir_rank(doc) > _dir_rank(view["directory"])
+        if updated:
+            try:
+                save_data(doc, os.path.join(MACHINE_DIR, DIRECTORY_CACHE))
+            except OSError as e:
+                _save_dir_state("Could not save the newer directory: %s" % e)
+                return dict(directory_view(), updated=False)
+        _save_dir_state("")
+        return dict(directory_view(), updated=updated)
+
+
+# ---- quick add: read a journal's guidelines page so the page can fill in the journal form ----
+GUIDELINES_MAX = 3 * 1024 * 1024
+
+
+class _TextOnly(html.parser.HTMLParser):
+    SKIP = {"script", "style", "noscript", "svg", "template", "head"}
+    BLOCK = {"p", "div", "li", "br", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "td", "dd", "dt"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts, self.title, self._skip, self._in_title = [], "", 0, False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "title":
+            self._in_title = True
+        elif tag in self.SKIP:
+            self._skip += 1
+        elif tag in self.BLOCK:
+            self.parts.append(" \n")
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+        elif tag in self.SKIP and self._skip:
+            self._skip -= 1
+        elif tag in self.BLOCK:
+            self.parts.append(" \n")
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title += data
+        elif not self._skip:
+            self.parts.append(data)
+
+
+def html_to_text(raw):
+    p = _TextOnly()
+    try:
+        p.feed(raw)
+        p.close()
+    except Exception:  # noqa: BLE001  a broken page still gives whatever text came before the problem
+        pass
+    text = re.sub(r"[ \t\r\f\v]+", " ", "".join(p.parts))
+    text = re.sub(r"\s*\n\s*", "\n", text).strip()
+    return re.sub(r"\s+", " ", p.title).strip(), text
+
+
+def public_host(host):
+    """True when every address the name points to is on the public internet (not this computer or the home network)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            return False
+    return bool(infos)
+
+
+def fetch_guidelines(url, timeout=15):
+    """(result, error). result: {url, title, text}. Only http(s) pages on the public internet."""
+    url = str(url or "").strip()
+    if url and "://" not in url:
+        url = "https://" + url
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None, "That does not look like a web address."
+    if not public_host(parts.hostname):
+        return None, "Pen Pal only reads pages on the public internet."
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PenPal/%s" % APP_VERSION,
+                                                   "Accept": "text/html,text/plain;q=0.9,*/*;q=0.1"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310  (checked above: http(s), public host)
+            final = r.geturl()
+            fp = urllib.parse.urlsplit(final)
+            if fp.scheme not in ("http", "https") or not public_host(fp.hostname or ""):
+                return None, "That page redirected somewhere Pen Pal will not follow."
+            kind = (r.headers.get("Content-Type") or "").lower()
+            if kind and not any(k in kind for k in ("text/html", "text/plain", "application/xhtml")):
+                return None, "That link is not a web page (it is %s)." % kind.split(";")[0]
+            body = r.read(GUIDELINES_MAX + 1)[:GUIDELINES_MAX]
+            charset = r.headers.get_content_charset() or "utf-8"
+    except urllib.error.HTTPError as e:
+        return None, "The site answered with an error (%s)." % e.code
+    except Exception as e:  # noqa: BLE001
+        return None, "Could not open that page: %s" % getattr(e, "reason", e)
+    raw = body.decode(charset, errors="replace")
+    if "text/plain" in kind:
+        title, text = "", raw
+    else:
+        title, text = html_to_text(raw)
+    return {"url": final, "title": title[:300], "text": text[:200000]}, None
 
 
 def save_data(obj, path=None):
@@ -618,6 +805,8 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._send_json(200, {"ok": False, "error": err} if err else dict(info, ok=True))
             except Exception as e:  # noqa: BLE001
                 return self._send_json(500, {"error": str(e)})
+        if self.path.split("?")[0] == "/api/directory":
+            return self._send_json(200, directory_view())
         if self.path.split("?")[0] == "/api/update":
             return self._send_json(200, update_check(force="force=1" in self.path))
         if self.path.split("?")[0] == "/api/update/status":
@@ -628,7 +817,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not self._host_ok():
             return self._send_json(403, {"error": "bad host"})
         route = self.path.split("?")[0]
-        if route not in ("/api/data", "/api/settings", "/api/update/download", "/api/update/apply", "/api/location", "/api/sync"):
+        if route not in ("/api/data", "/api/settings", "/api/update/download", "/api/update/apply", "/api/location", "/api/sync",
+                         "/api/directory/check", "/api/guidelines"):
             return self._send_json(404, {"error": "not found"})
         # Cross-site pages cannot set this header without a CORS preflight, which we never allow.
         if self.headers.get("X-Pen-Pal") != "1" and self.headers.get("X-Poetry-Tracker") != "1":
@@ -651,6 +841,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self._update_download()
         if route == "/api/update/apply":
             return self._update_apply()
+        if route == "/api/directory/check":
+            return self._send_json(200, directory_check(force=isinstance(obj, dict) and obj.get("force") is True))
+        if route == "/api/guidelines":
+            res, err = fetch_guidelines(obj.get("url") if isinstance(obj, dict) else "")
+            return self._send_json(400, {"error": err}) if err else self._send_json(200, res)
         if route in ("/api/location", "/api/sync"):
             if not isinstance(obj, dict):
                 return self._send_json(400, {"error": "unexpected shape"})

@@ -77,6 +77,19 @@ def main():
             pass
 
         def do_GET(self):
+            if self.path.startswith("/directory.json"):
+                doc = FAKE_DIR.get("doc")
+                if doc is None:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                body = json.dumps(doc).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             body = json.dumps({"tag_name": "v9.9.9", "body": "Big new things.", "html_url": "https://github.com/ThatOneGuyCpr/pen-pal/releases/tag/v9.9.9",
                                "assets": [{"name": "PenPal.exe", "size": 1234, "digest": "sha256:" + "0" * 64,
                                            "browser_download_url": "https://github.com/ThatOneGuyCpr/pen-pal/releases/download/v9.9.9/PenPal.exe"}]}).encode()
@@ -85,9 +98,13 @@ def main():
             self.end_headers()
             self.wfile.write(body)
 
+    FAKE_DIR = {"doc": None}  # what "GitHub" serves as the newer directory; nothing at first
+    with open(os.path.join(ROOT, "public", "directory.json"), encoding="utf-8") as f:
+        SHIPPED = json.load(f)
     gh = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHub)
     threading.Thread(target=gh.serve_forever, daemon=True).start()
-    env = dict(os.environ, PENPAL_UPDATE_API="http://127.0.0.1:%d/latest" % gh.server_address[1])
+    env = dict(os.environ, PENPAL_UPDATE_API="http://127.0.0.1:%d/latest" % gh.server_address[1],
+               PENPAL_DIRECTORY_URL="http://127.0.0.1:%d/directory.json" % gh.server_address[1])
     srv = subprocess.Popen([sys.executable, "server.py", "--no-browser", "--port", str(PORT)], cwd=app, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     errors = []
     try:
@@ -104,7 +121,8 @@ def main():
             # 400s are the deliberate refusals tested below; the browser logs every failed fetch
             page.on("console", lambda m: errors.append(m.text) if m.type == "error" and "status of 400" not in m.text else None)
             page.on("pageerror", lambda e: errors.append(str(e)))
-            page.on("dialog", lambda dlg: dlg.accept())
+            prompt_answer = {"text": ""}
+            page.on("dialog", lambda dlg: dlg.accept(prompt_answer["text"]) if dlg.type == "prompt" else dlg.accept())
 
             def saved():
                 page.wait_for_function("document.querySelector('#saveState') && /^Saved( |$)/.test(document.querySelector('#saveState').textContent)", timeout=8000)
@@ -145,12 +163,13 @@ def main():
 
             # ---- find journals
             tab("find")
-            check("22 journals" in view().lower(), "directory loads 22 journals")
-            check(page.locator(".toggle[aria-pressed=true]").count() == 1, "'open now or soon' starts on")
+            n_dir = len(SHIPPED["journals"])
+            check(("%d journals" % n_dir) in view().lower(), "directory loads %d journals" % n_dir)
+            check(page.locator(".toggle[aria-pressed=true]").count() == 1 and page.locator('.toggle[data-when="soon"][aria-pressed=true]').count() == 1, "'open or opening soon' starts on")
             page.fill("#findQuery", "miami")
             page.wait_for_timeout(100)
             check(page.locator(".result").count() == 0 and "No journals match" in view(), "Miami journals have no set window, so 'open now or soon' hides them")
-            page.click('.toggle[data-key="openSoon"]')
+            page.click('.toggle[data-when="any"]')
             res = page.locator(".result").all_inner_texts()
             check(any("SWWIM" in r for r in res) and any("Gulf Stream" in r for r in res), "Miami journals found: " + str(len(res)))
             href = page.get_attribute('a:has-text("Search Chill Subs")', "href")
@@ -209,6 +228,109 @@ def main():
             box = page.locator(".detail").bounding_box()
             check(n_res > 12 and box and 0 <= box["y"] < 140, "detail panel stays in view after scrolling the list (%d results, panel at y=%s)" % (n_res, box and round(box["y"])))
             page.evaluate("document.querySelector('.mainwrap').scrollTop = 0")
+
+            # ---- 2.5: filters, sort, saved searches
+            page.click('.toggle[data-when="any"]')
+            page.click(".morefilters summary")
+            page.click('.toggle[data-act="find-focus"][data-key="florida"]')
+            res = page.locator(".result").all_inner_texts()
+            fl = [e for e in SHIPPED["journals"] if "florida" in (e.get("focus") or [])]
+            check(len(res) == len(fl) and len(fl) > 0, "focus filter: Florida journals only (%d)" % len(res))
+            check("1 on" in page.inner_text(".morefilters summary"), "More filters shows how many are on")
+            page.select_option("#findSort", "name")
+            names = [page.locator(".result .t > span:first-child").nth(i).inner_text() for i in range(page.locator(".result").count())]
+            check(names == sorted(names, key=str.lower) or names == sorted(names), "A to Z sort")
+            prompt_answer["text"] = "Florida, any time"
+            page.click('[data-act="find-save"]')
+            saved()
+            sf = api()["settings"]["savedFinds"]
+            check(len(sf) == 1 and sf[0]["name"] == "Florida, any time" and sf[0]["opts"]["focus"] == ["florida"] and sf[0]["opts"]["sort"] == "name", "search saved to settings")
+            page.click('[data-act="find-clear"]')
+            check(page.locator(".result").count() > len(fl), "Clear brings everything back")
+            page.click('.savedchip [data-act="find-load"]')
+            check(page.locator(".result").count() == len(fl) and page.locator('.toggle[data-key="florida"][aria-pressed=true]').count() == 1, "loading a saved search restores it")
+            page.click('[data-act="find-clear"]')
+            page.fill("#findMaxFee", "0")
+            page.dispatch_event("#findMaxFee", "change")
+            free = [e for e in SHIPPED["journals"] if e.get("fee") == 0]
+            check(page.locator(".result").count() == len(free) and page.locator('.toggle[data-key="free"][aria-pressed=true]').count() == 1, "fee at most $0 is the same as No fee (%d)" % len(free))
+            page.click('[data-act="find-clear"]')
+            page.select_option("#findReply", "90")
+            fast = [e for e in SHIPPED["journals"] if e.get("replyDays") and e["replyDays"] <= 90]
+            check(page.locator(".result").count() == len(fast), "reply within 3 months (%d)" % len(fast))
+            page.click('[data-act="find-clear"]')
+            # for a poem: Harbor Song is out at Alpha Review, which takes simultaneous submissions
+            page.select_option("#findPoem", "p3")
+            nosim = [e for e in SHIPPED["journals"] if e.get("simSubs") == "no"]
+            check(page.locator(".result").count() == n_dir - len(nosim) and "have not seen" in view(), "for a poem that is out: journals with no simultaneous submissions drop out")
+            page.locator(".result").first.click()
+            add_send = page.locator('.detail [data-act="find-add-send"]')
+            if add_send.count():
+                add_send.click()
+                check(page.locator("#dlg [name=journalId]").count() == 1 and page.locator("#dlg input[value=p3]").is_checked(), "Add and send opens the submission form with the poem picked")
+                page.click("#dlg button[data-close]")
+                saved()
+            page.click('[data-act="find-clear"]')
+            page.evaluate("document.querySelector('#dlg').open && document.querySelector('#dlg').close()")
+            prompt_answer["text"] = ""
+            page.click('.savedchip [data-act="find-unsave"]')
+            saved()
+            check(api()["settings"]["savedFinds"] == [], "saved search removed")
+
+            # ---- 2.5: quick add from guidelines text (a link to this computer is refused)
+            page.click('[data-act="quick-add"]')
+            page.fill("#dlg [name=url]", "http://127.0.0.1:%d/" % PORT)
+            submit("read")
+            page.wait_for_function("document.querySelector('#dlgErr').textContent.length > 0")
+            check("public internet" in page.inner_text("#dlgErr") and page.locator("#dlg details[open]").count() == 1, "a link to this computer is refused, and the paste box opens")
+            page.fill("#dlg [name=url]", "")
+            page.fill("#dlg [name=text]", "The Saltmarsh Review reads poetry from March 1 to May 31. Send up to four poems. There is no submission fee. "
+                      "Simultaneous submissions are welcome. We pay $25 per poem. We respond within 8 weeks.")
+            submit("read")
+            page.wait_for_selector("#dlg [name=name]")
+            check("Found: reading period, fee, poems per submission" in view() + page.inner_text("#dlg"), "the journal form says what was found")
+            check(page.input_value("#dlg [name=maxPoems]") == "4" and page.input_value("#dlg [name=fee]") == "0" and page.input_value("#dlg [name=simSubs]") == "yes"
+                  and page.input_value("#dlg [name=replyDays]") == "56" and page.input_value("#dlg [name=pays]") == "yes" and page.is_checked("#dlg [name=repeat]"),
+                  "the form is filled in from the guidelines")
+            page.fill("#dlg [name=name]", "Saltmarsh Review")
+            submit()
+            saved()
+            sm = [j for j in api()["journals"] if j["name"] == "Saltmarsh Review"]
+            check(len(sm) == 1 and sm[0]["opens"][5:] == "03-01" and sm[0]["checked"] == d(0) and "Pays $25 per poem" in sm[0]["notes"], "quick-added journal saved")
+
+            # ---- 2.5: where can this poem go?
+            tab("poems")
+            page.locator("#view tbody tr", has_text="Mangrove").locator('button:has-text("Where can it go?")').click()
+            check("Where can it go?" in page.inner_text("#dlg") and page.locator("#dlg .matches li").count() > 0, "poem view lists journals it could go to")
+            first_add = page.locator('#dlg [data-act="match-add-send"]').first
+            if first_add.count():
+                first_add.click()
+                check(page.locator("#dlg input[value=p5]").is_checked(), "Add and send from the poem view picks the poem")
+                page.click("#dlg button[data-close]")
+                saved()
+            page.evaluate("document.querySelector('#dlg').open && document.querySelector('#dlg').close()")
+
+            # ---- 2.5: the directory updates itself, and your copy of a journal wins
+            newer = json.loads(json.dumps(SHIPPED))
+            newer["rev"] = SHIPPED.get("rev", 0) + 1
+            newer["journals"].append({"id": "zeta-test", "name": "Zeta Test Review", "url": "https://zeta.example", "yearRound": True, "fee": 0, "simSubs": "yes", "note": "A test journal."})
+            for e in newer["journals"]:
+                if e["id"] == "copper-nickel":
+                    e["fee"] = 9
+                    e["checked"] = d(1)
+            FAKE_DIR["doc"] = newer
+            tab("find")
+            page.click('[data-act="dir-check"]')
+            page.wait_for_function("document.querySelector('.pagehead') && /%d journals/.test(document.querySelector('.pagehead').textContent)" % (n_dir + 1), timeout=8000)
+            check(True, "Check for new journals downloads the newer directory (%d journals)" % (n_dir + 1))
+            page.click('.toggle[data-when="any"]')
+            page.fill("#findQuery", "copper")
+            page.locator(".result", has_text="Copper Nickel").click()
+            check("Newer details in the directory" in page.inner_text(".detail") and "$9" in page.inner_text(".detail .dirchanges"), "your saved journal shows the directory's newer fee")
+            page.click('.detail [data-act="dir-keep"]')
+            saved()
+            check("Newer details" not in page.inner_text(".detail") and [j["fee"] for j in api()["journals"] if j["name"] == "Copper Nickel"] == [3], "Keep mine leaves your copy alone")
+            page.fill("#findQuery", "")
             tab("journals")
 
             # ---- journal dialog: open all year, extra windows
