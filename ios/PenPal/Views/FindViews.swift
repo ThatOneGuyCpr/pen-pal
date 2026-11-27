@@ -421,7 +421,6 @@ struct QuickAddSheet: View {
     }
 }
 
-struct SendTarget: Identifiable { let id: String }
 
 /// Where can this poem go? A section for the poem screen.
 struct PoemMatchesSection: View {

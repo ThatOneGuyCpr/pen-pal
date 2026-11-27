@@ -577,8 +577,7 @@ def native_checks(window, api, res, check, lines, shots):
     lines.append("info drag from the title strip moved the window by %s (asked for (140, 70)): %s" % (moved, "works" if abs(moved[0] - 140) <= 6 and abs(moved[1] - 70) <= 6 else "no mouse input here, or it did not move"))
     g = nativeframe.geometry(window)
     before, after = nativeframe.mouse_drag(window, g["client"][0] + 400 * dy, g["client"][1] + 1, 0, -50)
-    lines.append("info drag on the top edge: top %d -> %d, height %d -> %d (hit tests seen %d, on the top band %d)" % (
-        before[1], after[1], before[3] - before[1], after[3] - after[1], nativeframe.STATE["hits"], nativeframe.STATE["topHits"]))
+    lines.append("info drag on the top edge: top %d -> %d, height %d -> %d" % (before[1], after[1], before[3] - before[1], after[3] - after[1]))
 
 
 def run_smoke(out_path, title_bar):

@@ -8,9 +8,11 @@ The page draws its title strip and marks it with the CSS `app-region: drag`. Wit
 non-client region support switched on, WebView2 treats that strip as the window's caption: drag
 to move (and snap), double-click to maximize, right-click for the system menu.
 
-Two gaps are filled by hand, because WebView2 in a normal window cannot report them:
-  the top edge     the page asks begin_resize(), which starts Windows' own sizing loop
+The top edge is part of that caption strip too, and WebView2 resizes from it the way Windows does
+on a normal title bar. One gap is filled by hand, because WebView2 in a normal window cannot report
+its buttons to Windows:
   Snap layouts     hovering the maximize button asks snap_layouts(), which presses Win+Z
+begin_resize() and begin_move() hand a drag to Windows' own loops, for a WebView2 too old for app-region.
 
 Windows only; everything here fails soft. If something cannot be set up, STATE says so and the
 page falls back to the older, page-driven title bar.
@@ -22,12 +24,9 @@ import threading
 import time
 
 LOG = logging.getLogger("penpal")
-STATE = {"installed": False, "appRegion": False, "error": "", "sizing": 0.0, "hits": 0, "topHits": 0}
-TOP_BAND = 5  # px (at 100%) along the top edge that resize the window
+STATE = {"installed": False, "appRegion": False, "error": "", "sizing": 0.0}
 
 WM_NCCALCSIZE = 0x0083
-WM_NCHITTEST = 0x0084
-HTTOP, HTTOPLEFT, HTTOPRIGHT, HTCLIENT = 12, 13, 14, 1
 WM_ENTERSIZEMOVE = 0x0231
 WM_SYSCOMMAND = 0x0112
 WM_NCDESTROY = 0x0082
@@ -130,21 +129,6 @@ def install(window):
                         # Maximized windows hang a frame's width off each monitor edge, so keep that much at the top.
                         border = p.rgrc[0].left - left
                         p.rgrc[0].top = top + (border if user32.IsZoomed(h) else 0)
-                    return res
-                if msg == WM_NCHITTEST:
-                    # WebView2 passes hit tests for the page's app-region strips up to this window. The top few
-                    # pixels of a window that is not maximized resize it, as on any other window.
-                    res = user32.CallWindowProcW(old["proc"], h, msg, wp, lp)
-                    STATE["hits"] += 1
-                    if res in (HTCLIENT, HTCAPTION) and not user32.IsZoomed(h):
-                        x, y = ctypes.c_short(lp & 0xFFFF).value, ctypes.c_short((lp >> 16) & 0xFFFF).value
-                        r = wintypes.RECT()
-                        user32.GetWindowRect(h, ctypes.byref(r))
-                        band = max(TOP_BAND, round(TOP_BAND * user32.GetDpiForWindow(h) / 96)) if hasattr(user32, "GetDpiForWindow") else TOP_BAND
-                        if r.top <= y < r.top + band:
-                            STATE["topHits"] += 1
-                            corner = band * 2
-                            return HTTOPLEFT if x < r.left + corner else HTTOPRIGHT if x >= r.right - corner else HTTOP
                     return res
                 if msg == WM_ENTERSIZEMOVE:
                     STATE["sizing"] = time.monotonic()

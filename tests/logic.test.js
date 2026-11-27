@@ -903,7 +903,14 @@ test('the shipped directory file loads cleanly', () => {
     assert.ok(/^https:\/\//.test(e.url), e.name + ' needs an https link');
     assert.ok(e.note && !e.note.includes('\u2014'), e.name + ' note');
     for (const w of e.windows) assert.ok(L.isDate('2028-' + w.opens) && L.isDate('2028-' + w.closes), e.name + ' window');
+    assert.ok(L.isDate(e.checked) && e.checked <= dir.checked, e.name + ' has the date it was checked');
+    assert.ok(!(e.payPerPoem && e.pays !== 'yes'), e.name + ' pay amount without pays: yes');
+    assert.ok(!JSON.stringify(e).includes('\u2014'), e.name + ' has an em dash');
   }
+  // raw focus words are all known ones
+  for (const j of raw.journals) for (const f of j.focus || []) assert.ok(L.FOCUS.some(([k]) => k === f), j.id + ' focus ' + f);
+  assert.ok(Number.isInteger(raw.rev) && raw.rev >= 2, 'the directory has a revision number for updates');
+  assert.ok(dir.journals.length >= 90, 'a broad directory');
 });
 
 test('directory entries become journals with yearly windows', () => {
